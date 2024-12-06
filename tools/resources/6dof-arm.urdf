@@ -1,0 +1,57 @@
+<robot name="6dof-arm">
+	<link name="base_link"/>
+	<link name="k0"/>
+	<link name="k1"/>
+	<link name="k2"/>
+	<link name="k3"/>
+	<link name="k4"/>
+	<link name="k5"/>
+	
+	<joint name="j0" type="revolute">
+		<origin xyz="0.00 0.00 0.05" rpy="0.00 0.00 0.00"/>
+		<parent link="base_link"/>
+		<child link="k0"/>
+		<axis xyz="0 0 1"/> 
+		<limit lower="-3.14" upper="3.14" />
+	</joint>
+	
+	<joint name="j1" type="revolute">
+		<origin xyz="-0.1 0.20 0.16" rpy="0.00 0.00 0.00"/>
+		<parent link="k0"/>
+		<child link="k1"/>
+		<axis xyz="-1 0 0"/>
+		<limit lower="0" upper="3.14" />
+	</joint>
+	
+	<joint name="j2" type="revolute">
+		<origin xyz="0.00 -0.40 0.00" rpy="0.00 0.00 0.00"/>
+		<parent link="k1"/>
+		<child link="k2"/>
+		<axis xyz="1 0 0"/>
+		<limit lower="0" upper="2" />
+	</joint>
+	
+	<joint name="j3" type="revolute">
+		<origin xyz="0.10 0.10 0.10" rpy="0.00 0.00 0.00"/>
+		<parent link="k2"/>
+		<child link="k3"/>
+		<axis xyz="0 1 0"/>
+		<limit lower="-3.14" upper="3.14" />
+	</joint>
+	
+	<joint name="j4" type="revolute">
+		<origin xyz="0.00 0.28 0.00" rpy="0.00 0.00 0.00"/>
+		<parent link="k3"/>
+		<child link="k4"/>
+		<axis xyz="1 0 0"/>
+		<limit lower="-1.57" upper="1.57" />
+	</joint>
+	
+	<joint name="j5" type="revolute">
+		<origin xyz="0.00 0.10 0.00" rpy="0.00 0.00 0.00"/>
+		<parent link="k4"/>
+		<child link="k5"/>
+		<axis xyz="0 1 0"/>
+		<limit lower="-3.14" upper="3.14" />
+	</joint>
+</robot>
