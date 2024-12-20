@@ -21,12 +21,10 @@ angles= [np.deg2rad(i) for i in [
         0.00,
         ]]
 
-target = np.array([[ 1.  ,  0.  ,  0.  , -0.4 ],
-                   [ 0.  ,  1.  ,  0.  ,  0.05],
-                   [ 0.  ,  0.  ,  1.  ,  0.1 ],
-                   [ 0.  ,  0.  ,  0.  ,  1.  ]])
+fk = my_chain.forward_kinematics(angles)
+target = np.array([-0.4, 0.05, 0.1 ])
 
-final = my_chain.inverse_kinematics_frame(target)
+final = my_chain.inverse_kinematics(target)
 #%%
 
 ax = matplotlib.pyplot.figure().add_subplot(111, projection='3d')

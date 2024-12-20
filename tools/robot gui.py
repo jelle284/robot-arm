@@ -1,7 +1,8 @@
 import tkinter as tk
-import time
 import paho.mqtt.client as mqtt
 import json
+import ikpy.chain
+import numpy as np
 
 # MQTT broker information
 MQTT_BROKER = "192.168.0.10"
@@ -9,10 +10,11 @@ MQTT_PORT = 1883
 MQTT_TOPIC = "/robot/position"
 
 # Set up MQTT client
-client = mqtt.Client()
+client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 
 # Connect to the MQTT broker
 def connect_mqtt():
+    pass
     client.connect(MQTT_BROKER, MQTT_PORT, 60)
     client.loop_start()  # Start the MQTT client loop in the background
 
@@ -32,15 +34,15 @@ def send_move(axis, angle, duration, movement_type):
     # Publish the move to the MQTT topic
     client.publish(MQTT_TOPIC, move_json)
 
-# Placeholder function to calculate the current end-effector position based on joint angles
-def calculate_end_effector_position(joint_angles):
-    # Example implementation: replace with actual forward kinematics logic
-    return [sum(joint_angles), sum(joint_angles) / 2, sum(joint_angles) / 3]
+my_chain = ikpy.chain.Chain.from_urdf_file("resources/6dof-arm.urdf")
 
-# Placeholder function to calculate the required joint angles to reach a desired position
+def calculate_end_effector_position(joint_angles):
+    res = my_chain.forward_kinematics([0]+[np.deg2rad(a) for a in joint_angles])
+    return res[:3,3]
+
 def calculate_joint_angles(desired_position):
-    # Example implementation: replace with actual inverse kinematics logic
-    return [desired_position[0] / 6, desired_position[1] / 6, desired_position[2] / 6, 0, 0, 0]
+    res = my_chain.inverse_kinematics(desired_position)
+    return [np.rad2deg(a) for a in res[1:]]
 
 # GUI window for controlling the robot
 class RobotControlGUI:
@@ -58,6 +60,7 @@ class RobotControlGUI:
 
         # Update effector position whenever current angles change
         for angle_var in self.current_angles:
+            print(f"Setting trace for {angle_var}")
             angle_var.trace("w", self.update_effector_position)
 
         # Axis controls
@@ -110,7 +113,9 @@ class RobotControlGUI:
 
         tk.Button(button_frame, text="Calculate Move", command=self.calculate_move).pack(side=tk.LEFT, padx=5)
         tk.Button(button_frame, text="Move All", command=self.move_all).pack(side=tk.LEFT, padx=5)
-
+        
+        #debuf button
+        tk.Button(self.root, text="Test Update", command=self.update_effector_position).pack()
     # Automatically update current end-effector position
     def update_effector_position(self, *args):
         try:
@@ -123,12 +128,12 @@ class RobotControlGUI:
             position = calculate_end_effector_position(joint_angles)
             for i in range(3):
                 self.calculated_effector_position[i].set(f"{position[i]:.2f}")
+                
         except Exception as e:
             # Handle unexpected errors gracefully
             for i in range(3):
                 self.calculated_effector_position[i].set("Error")
             print(f"Error in update_effector_position: {e}")
-
 
     # Function to calculate move amounts
     def calculate_move(self):
@@ -154,12 +159,12 @@ def main():
     # Create the tkinter window
     root = tk.Tk()
     app = RobotControlGUI(root)
-
+    
     # Start the GUI event loop
     root.mainloop()
 
     # Stop the MQTT client loop when GUI is closed
     client.loop_stop()
-
+    
 if __name__ == "__main__":
     main()
