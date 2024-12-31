@@ -7,4 +7,7 @@ cmake_minimum_required(VERSION 3.16)
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(robot)
 
-set(EXTRA_COMPONENT_DIRS components/motion/ )
+set(EXTRA_COMPONENT_DIRS
+    components/motion/
+    components/micro_ros_espidf_component/
+)

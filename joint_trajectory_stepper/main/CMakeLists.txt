@@ -1,6 +1,7 @@
 idf_component_register(
-    SRCS "parse_moves.c" "main.c"
-    INCLUDE_DIRS "."
+    SRCS "main.c"
+    INCLUDE_DIRS
+        "."
     REQUIRES
         nvs_flash
         esp_netif
@@ -11,4 +12,5 @@ idf_component_register(
         json
         motion
         esp_timer
+        micro_ros_espidf_component
 )
