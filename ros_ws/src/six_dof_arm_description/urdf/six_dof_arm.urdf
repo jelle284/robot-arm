@@ -1,0 +1,184 @@
+<robot name="six_dof_arm">
+	<link name="base_link">
+		<visual>
+			<origin xyz="0 0 0" rpy="0 0 0"/>
+			<geometry>
+				<mesh filename="package://six_dof_arm_description/meshes/base_link.dae"/>
+			</geometry>
+		</visual>
+		<collision>
+			<origin xyz="0 0 -0.035" rpy="0 0 0"/>
+			<geometry>
+				<cylinder radius="0.1" length="0.07"/>
+			</geometry>
+		</collision>
+	</link>
+	
+	<link name="k0">
+		<visual>
+			<origin xyz="0 0 0" rpy="0 0 0"/>
+			<geometry>
+				<mesh filename="package://six_dof_arm_description/meshes/link01.dae"/>
+			</geometry>
+		</visual>
+		<collision>
+			<origin xyz="0.005 0.0 0.05" rpy="0.0 0.0 0.0"/>
+			<geometry>
+				<box size="0.16 0.10 0.1"/>
+			</geometry>
+		</collision>
+		<collision>
+			<origin xyz="0.06 -0.12 0.11" rpy="-0.261799388 0.0 0.0"/>
+			<geometry>
+				<box size="0.02 0.24 0.14"/>
+			</geometry>
+		</collision>
+	</link>
+	
+	<link name="k1">
+		<visual>
+			<origin xyz="0 0 0" rpy="1.570796 0 -1.570796"/>
+			<geometry>
+				<mesh filename="package://six_dof_arm_description/meshes/link02.dae"/>
+			</geometry>
+		</visual>
+		<collision>
+			<origin xyz="0.008 0.15 0.0" rpy="0.0 0.0 0.0"/>
+			<geometry>
+				<box size="0.02 0.3 0.14"/>
+			</geometry>
+		</collision>
+		<collision>
+			<origin xyz="0.01 0.0 0.0" rpy="0.0 1.570796 0.0"/>
+			<geometry>
+				<cylinder radius="0.09" length="0.06"/>
+			</geometry>
+		</collision>
+		<collision>
+			<origin xyz="0.01 0.3 0.0" rpy="0.0 1.570796 0.0"/>
+			<geometry>
+				<cylinder radius="0.09" length="0.06"/>
+			</geometry>
+		</collision>
+	</link>
+	
+	<link name="k2">
+		<visual>
+			<origin xyz="0 0 0" rpy="0 -1.570796 0"/>
+			<geometry>
+				<mesh filename="package://six_dof_arm_description/meshes/link03.dae"/>
+			</geometry>
+		</visual>
+		<collision>
+			<origin xyz="-0.070 0.0 0.0" rpy="0.0 1.570796 0.0"/>
+			<geometry>
+				<cylinder radius="0.09" length="0.10"/>
+			</geometry>
+		</collision>
+		<collision>
+			<origin xyz="-0.0925 -0.015 0.1025" rpy="1.570796 0.0 0.0"/>
+			<geometry>
+				<cylinder radius="0.07" length="0.13"/>
+			</geometry>
+		</collision>
+	</link>
+	
+	<link name="k3">
+		<visual>
+			<origin xyz="0 0 0" rpy="1.570796 0 0"/>
+			<geometry>
+				<mesh filename="package://six_dof_arm_description/meshes/link04.dae"/>
+			</geometry>
+		</visual>
+		<collision>
+			<origin xyz="0.0 -0.10 0.0" rpy="0.0 0.0 0.0"/>
+			<geometry>
+				<box size="0.12 0.20 0.12"/>
+			</geometry>
+		</collision>
+	</link>
+	
+	<link name="k4">
+		<visual>
+			<origin xyz="0 0 0" rpy="1.570796 0 0"/>
+			<geometry>
+				<mesh filename="package://six_dof_arm_description/meshes/link05.dae"/>
+			</geometry>
+		</visual>
+		<collision>
+			<origin xyz="0.0 -0.070 0.0" rpy="1.570796 0.0 0.0"/>
+			<geometry>
+				<cylinder radius="0.070" length="0.026"/>
+			</geometry>
+		</collision>
+		<collision>
+			<origin xyz="0.0 -0.05 0.0" rpy="0.0 0.0 0.0"/>
+			<geometry>
+				<box size="0.14 0.02 0.12"/>
+			</geometry>
+		</collision>
+	</link>
+	
+	<link name="k5">
+		<visual>
+			<origin xyz="0 0 0" rpy="1.570796 0 0"/>
+			<geometry>
+				<mesh filename="package://six_dof_arm_description/meshes/end_effector.dae"/>
+			</geometry>
+		</visual>
+		<collision>
+			<origin xyz="0.0 -0.016 0.0" rpy="1.570796 0.0 0.0"/>
+			<geometry>
+				<cylinder radius="0.05" length="0.02"/>
+			</geometry>
+		</collision>
+	</link>
+	
+	<joint name="j0" type="revolute">
+		<origin xyz="0.000 0.000 0.000" rpy="0.00 0.00 0.00"/>
+		<parent link="base_link"/>
+		<child link="k0"/>
+		<axis xyz="0 0 1"/> 
+		<limit lower="-3.14" upper="3.14" effort="80.0" velocity="2.01"/>
+	</joint>
+	
+	<joint name="j1" type="revolute">
+		<origin xyz="0.092 -0.160 0.120" rpy="0.00 0.00 0.00"/>
+		<parent link="k0"/>
+		<child link="k1"/>
+		<axis xyz="1 0 0"/>
+		<limit lower="0.0" upper="3.14" effort="50.0" velocity="2.01"/>
+	</joint>
+	
+	<joint name="j2" type="revolute">
+		<origin xyz="0.000 0.300 0.000" rpy="0.00 0.00 0.00"/>
+		<parent link="k1"/>
+		<child link="k2"/>
+		<axis xyz="-1 0 0"/>
+		<limit lower="0.0872664626" upper="3.141592" effort="50.0" velocity="2.01"/>
+	</joint>
+	
+	<joint name="j3" type="revolute">
+		<origin xyz="-0.092 -0.080 0.104" rpy="0.00 0.00 0.00"/>
+		<parent link="k2"/>
+		<child link="k3"/>
+		<axis xyz="0 1 0"/>
+		<limit lower="-3.14" upper="3.14" effort="30.0" velocity="2.01"/>
+	</joint>
+	
+	<joint name="j4" type="revolute">
+		<origin xyz="0.00 -0.202 0.00" rpy="0.00 0.00 0.00"/>
+		<parent link="k3"/>
+		<child link="k4"/>
+		<axis xyz="1 0 0"/>
+		<limit lower="-1.57" upper="1.57" effort="10.0" velocity="2.01"/>
+	</joint>
+	
+	<joint name="j5" type="revolute">
+		<origin xyz="0.00 -0.062 0.00" rpy="0.00 0.00 0.00"/>
+		<parent link="k4"/>
+		<child link="k5"/>
+		<axis xyz="0 1 0"/>
+		<limit lower="-3.14" upper="3.14" effort="10.0" velocity="2.01"/>
+	</joint>
+</robot>

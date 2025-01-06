@@ -5,9 +5,11 @@
 cmake_minimum_required(VERSION 3.16)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(robot)
+project(joint_trajectory_stepper)
 
 set(EXTRA_COMPONENT_DIRS
     components/motion/
     components/micro_ros_espidf_component/
 )
+
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
