@@ -2,3 +2,6 @@ build/
 log/
 install/
 joint_states.json
+.vscode
+__pycache__/
+*.pyc
