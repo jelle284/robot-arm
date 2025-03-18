@@ -28,14 +28,14 @@ motors:
     step_resolution: 800
     joints:
       - index: 4
-        ratio: -1.0
+        ratio: -0.5
       - index: 5
-        ratio: -1.0
+        ratio: -0.5
   motor6:
     gear_ratio: 19.047619047619047
     step_resolution: 800
     joints:
       - index: 4
-        ratio: -1.0
+        ratio: -0.5
       - index: 5
-        ratio: 1.0
+        ratio: 0.5

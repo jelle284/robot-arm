@@ -11,6 +11,7 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/config', ['config/motors.yaml']),
+        ('share/' + package_name + '/launch', ['launch/dev.launch.py']),
         ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -21,7 +22,9 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'action_server = stepper_trajectory_processor.action_server:main'
+            'stepper_trajectory_processor = stepper_trajectory_processor.stepper_trajectory_processor_node:main',
+            'stepper_test_node = stepper_trajectory_processor.stepper_test_node:main',
+            'stepper_joint_states_node = stepper_trajectory_processor.stepper_joint_states_node:main'
         ],
     },
 )
