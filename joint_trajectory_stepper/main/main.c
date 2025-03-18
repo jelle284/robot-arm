@@ -17,15 +17,13 @@
 #include <rclc/rclc.h>
 #include <rclc/executor.h>
 #include <rmw_microros/rmw_microros.h>
-#include "trajectory_msgs/msg/joint_trajectory_point.h"
+#include "stepper_msgs/msg/stepper_trajectory.h"
 
 #define RCCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){printf("Failed status on line %d: %d. Aborting.\n",__LINE__,(int)temp_rc);vTaskDelete(NULL);}}
 #define RCSOFTCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){printf("Failed status on line %d: %d. Continuing.\n",__LINE__,(int)temp_rc);}}
 
-//#define LOG_LEVEL ESP_LOG_ERROR
 
 #define NAXIS 6
-#define STEPS_PR_REV 800
 
 static const char* TAG = "main";
 
@@ -33,94 +31,67 @@ QueueHandle_t motion_queue;
 motion_axis_t* motion_axis[NAXIS];
 
 typedef struct {
-    float positions[NAXIS];
-    float duration;
-} RobotMove;
+    motion_instruction_t axis_cmd[NAXIS];
+} move_group_instruction_t;
 
-void motion_task(void* arg) {
-
+void motion_task(void* arg) 
+{
     ESP_LOGI(TAG, "Configuring motion axis");
     const int pulse_pins[] = {26, 14, 23, 33, 18, 21};
     const int dir_pins[] = {27, 13, 4, 25, 19, 22};
     for (int i = 0; i < NAXIS; ++i) {
-        motion_axis[i] = motion_axis_create(pulse_pins[i], dir_pins[i], STEPS_PR_REV);
+        motion_axis[i] = motion_axis_create(pulse_pins[i], dir_pins[i]);
+        motion_axis_reset(motion_axis[i]);
     }
-    motion_axis[0]->gear_ratio = 56.0f * 50.0f/20.0f;
-    motion_axis[1]->gear_ratio = 56.0f;
-    motion_axis[2]->gear_ratio = 56.0f;
-    motion_axis[3]->gear_ratio = 40.25f * 50.0f/16.0f;
-    motion_axis[4]->gear_ratio = 80.0f/28.0f * 80.0f/12.0f;
-    motion_axis[5]->gear_ratio = 80.0f/28.0f * 80.0f/12.0f;
 
-    motion_queue = xQueueCreate(32, sizeof(RobotMove));
+    motion_queue = xQueueCreate(32, sizeof(move_group_instruction_t));
     if (!motion_queue) {
         ESP_LOGE(TAG, "Failed to create motion queue");
         return;
     }
 
     for (;;) {
-        RobotMove move;
+        move_group_instruction_t move;
         if (xQueueReceive(motion_queue, &move, portMAX_DELAY)) {
             for (int i = 0; i < NAXIS; ++i) {
-                if (fabsf(move.positions[i]) < 0.001f) continue;
-                motion_instruction_t instr = {
-                    .angle = move.positions[i]*180.0f/3.141592f, // rad to deg
-                    .duration = move.duration,
-                    .profile = MOTION_PROFILE_SCURVE
-                };
-                ESP_LOGI(TAG, "Executing move on axis %d: angle=%.2f, duration=%.2f", i, instr.angle, instr.duration);
-                motion_axis_move(motion_axis[i], instr);
+                ESP_LOGI(TAG, "Executing move on axis %d: angle=%ld, duration=%hu",
+                     i, move.axis_cmd[i].steps, move.axis_cmd[i].pulse_us);
+                motion_axis_move(motion_axis[i], move.axis_cmd[i]);
             }
         }
+        
     }
 }
 
-void subscription_callback(const void* msg_in) {
-    const trajectory_msgs__msg__JointTrajectoryPoint* msg = (const trajectory_msgs__msg__JointTrajectoryPoint*)msg_in;
+void subscription_callback(const void* msg_in) 
+{
+    const stepper_msgs__msg__StepperTrajectoryPoint* msg = (const stepper_msgs__msg__StepperTrajectoryPoint*)msg_in;
 
-    ESP_LOGI(TAG, "Positions size: %d", msg->positions.size);
-    ESP_LOGI(TAG, "Velocities size: %d", msg->velocities.size);
-    ESP_LOGI(TAG, "Accelerations size: %d", msg->accelerations.size);
-    ESP_LOGI(TAG, "Effort size: %d", msg->effort.size);
-    
-    
-    ESP_LOGI(TAG, "  Positions: ");
-    for (int i = 0; i < msg->positions.size; ++i) {
-        ESP_LOGI(TAG, "    [%d]: %f", i, msg->positions.data[i]);
-    }
-    ESP_LOGI(TAG, "  Velocities: ");
-    for (int i = 0; i < msg->velocities.size; ++i) {
-        ESP_LOGI(TAG, "    [%d]: %f", i, msg->velocities.data[i]);
-    }
-    ESP_LOGI(TAG, "  Accelerations: ");
-    for (int i = 0; i < msg->accelerations.size; ++i) {
-        ESP_LOGI(TAG, "    [%d]: %f", i, msg->accelerations.data[i]);
-    }
-    ESP_LOGI(TAG, "  Effort: ");
-    for (int i = 0; i < msg->effort.size; ++i) {
-        ESP_LOGI(TAG, "    [%d]: %f", i, msg->effort.data[i]);
-    }
-    ESP_LOGI(TAG, "  Time from Start: %ld sec, %ld nsec", msg->time_from_start.sec, msg->time_from_start.nanosec);
+    move_group_instruction_t move = {0};
 
-    RobotMove move = {0};
-
-    if (NAXIS == msg->positions.size) {
-        move.positions[0] = -1.0f * msg->positions.data[0];
-        move.positions[1] = 1.0f * msg->positions.data[1];
-        move.positions[2] = 1.0f * msg->positions.data[2];
-        move.positions[3] = -1.0f * msg->positions.data[3];
-        // differential joint
-        move.positions[4] = -1.0f*msg->positions.data[4] + -1.0f*msg->positions.data[5];
-        move.positions[5] = -1.0f*msg->positions.data[4] + 1.0f*msg->positions.data[5];
+    for (int i = 0; i < NAXIS; ++i) {
+        move.axis_cmd[i].steps = msg->steps.data[i];
+        if (abs(move.axis_cmd[i].steps) > 0) {
+            move.axis_cmd[i].pulse_us = msg->duration_us / move.axis_cmd[i].steps;
+        } else {
+            move.axis_cmd[i].pulse_us = 0;
+        }
     }
-
-    move.duration = msg->time_from_start.sec + msg->time_from_start.nanosec / 1e9;
-    if (xQueueSend(motion_queue, &move, portMAX_DELAY) != pdTRUE) {
+    if (xQueueSend(motion_queue, &move, 0) != pdTRUE) {
         ESP_LOGE(TAG, "Failed to enqueue motion command");
     }
 }
 
-void micro_ros_task(void * arg) {
+void feedback_task(void *arg) 
+{
+    ESP_LOGI(TAG, "Feedback task entry");
+    for (;;) {
+        motion_event_await(motion_axis, NAXIS);
+    }
+}
+
+void micro_ros_task(void * arg) 
+{
 	rcl_allocator_t allocator = rcl_get_default_allocator();
 	rclc_support_t support;
 
@@ -151,7 +122,7 @@ void micro_ros_task(void * arg) {
 	RCCHECK(rclc_subscription_init_default(
 		&subscriber,
 		&node,
-		ROSIDL_GET_MSG_TYPE_SUPPORT(trajectory_msgs, msg, JointTrajectoryPoint),
+		ROSIDL_GET_MSG_TYPE_SUPPORT(stepper_msgs, msg, StepperTrajectoryPoint),
 		"/cmd_point"));
 
 	// Create executor.
@@ -160,22 +131,21 @@ void micro_ros_task(void * arg) {
 	unsigned int rcl_wait_timeout = 1000;   // in ms
 	RCCHECK(rclc_executor_set_timeout(&executor, RCL_MS_TO_NS(rcl_wait_timeout)));
 
-	// Add subscriber to executor.
-    trajectory_msgs__msg__JointTrajectoryPoint recv_msg;
-	RCCHECK(rclc_executor_add_subscription(&executor, &subscriber, &recv_msg, &subscription_callback, ON_NEW_DATA));
-
     // Allocate message memory
-    double msg_positions[NAXIS];
-    recv_msg.positions.capacity = NAXIS;
-    recv_msg.positions.data = msg_positions;
-    recv_msg.positions.size = 0;
-    recv_msg.time_from_start.sec = 0; 
-    recv_msg.time_from_start.nanosec = 0;
+    stepper_msgs__msg__StepperTrajectoryPoint recv_msg;
+    int32_t msg_steps[NAXIS];
+    recv_msg.steps.capacity = NAXIS;
+    recv_msg.steps.data = msg_steps;
+    recv_msg.steps.size = 0;
+    recv_msg.duration_us = 0; 
+
+	// Add subscriber to executor.
+    RCCHECK(rclc_executor_add_subscription(&executor, &subscriber, &recv_msg, &subscription_callback, ON_NEW_DATA));
 
 	// Spin forever.
 	while(1){
-		rclc_executor_spin_some(&executor, RCL_MS_TO_NS(100));
-        rclc_sleep_ms(100);
+		rclc_executor_spin_some(&executor, RCL_MS_TO_NS(10));
+        //rclc_sleep_ms(100);
 	}
 
 	// Free resources.
@@ -187,7 +157,10 @@ void micro_ros_task(void * arg) {
 
 void app_main() 
 {   
+    esp_log_level_set("*", ESP_LOG_WARN);
     network_init();
+    motion_system_init();
     xTaskCreate(motion_task, "motion_task", 4096, NULL, 5, NULL);
+    xTaskCreate(feedback_task, "feedback_task", 4096, NULL, 5, NULL);
     xTaskCreate(micro_ros_task, "uros_task", 32000, NULL, 5, NULL);
 }

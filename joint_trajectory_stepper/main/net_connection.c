@@ -1,14 +1,14 @@
 #include "net_connection.h"
 
 static const char* TAG = "NET_CONNECTION";
-EventGroupHandle_t event_group;
+EventGroupHandle_t wifi_event_group;
 
 void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
 {
     if (event_base == IP_EVENT) {
         switch (event_id) {
             case IP_EVENT_STA_GOT_IP:
-                xEventGroupSetBits(event_group, BIT_WIFI_CONNECTED);
+                xEventGroupSetBits(wifi_event_group, BIT_WIFI_CONNECTED);
             break;
         }
     } else if (event_base == WIFI_EVENT) {
@@ -35,7 +35,7 @@ void network_init() {
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     
     ESP_LOGI(TAG, "init Wi-Fi");
-    event_group = xEventGroupCreate();
+    wifi_event_group = xEventGroupCreate();
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL));
 
@@ -69,6 +69,6 @@ void network_init() {
     ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_STA) );
     ESP_ERROR_CHECK( esp_wifi_start() );
 
-    xEventGroupWaitBits(event_group, BIT_WIFI_CONNECTED, pdFALSE, pdFALSE, portMAX_DELAY);
+    xEventGroupWaitBits(wifi_event_group, BIT_WIFI_CONNECTED, pdFALSE, pdFALSE, portMAX_DELAY);
     ESP_LOGI(TAG, "Wi-Fi Succesfully connected");
 }
