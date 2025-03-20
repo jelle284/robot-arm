@@ -12,6 +12,7 @@ setup(
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/config', ['config/motors.yaml']),
         ('share/' + package_name + '/launch', ['launch/dev.launch.py']),
+        ('lib/' + package_name, [package_name+'/stepper_joint_conversion.py']),
         ],
     install_requires=['setuptools'],
     zip_safe=True,

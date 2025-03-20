@@ -7,13 +7,11 @@ endif()
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
-find_package(std_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
-  "msg/StepperTrajectory.msg"
-  "msg/StepperTrajectoryPoint.msg"
-  DEPENDENCIES std_msgs
+  "msg/StepperFeedback.msg"
+  "msg/StepperPoint.msg"
 )
 
 if(BUILD_TESTING)

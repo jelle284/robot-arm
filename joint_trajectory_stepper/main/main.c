@@ -17,150 +17,199 @@
 #include <rclc/rclc.h>
 #include <rclc/executor.h>
 #include <rmw_microros/rmw_microros.h>
-#include "stepper_msgs/msg/stepper_trajectory.h"
+#include "stepper_msgs/msg/stepper_point.h"
+#include "stepper_msgs/msg/stepper_feedback.h"
 
+// ROS2 error checking
 #define RCCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){printf("Failed status on line %d: %d. Aborting.\n",__LINE__,(int)temp_rc);vTaskDelete(NULL);}}
 #define RCSOFTCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){printf("Failed status on line %d: %d. Continuing.\n",__LINE__,(int)temp_rc);}}
 
-
-#define NAXIS 6
-
+// ESP Log tag
 static const char* TAG = "main";
 
-QueueHandle_t motion_queue;
-motion_axis_t* motion_axis[NAXIS];
+// Motion axis setup
+#define NAXIS 6
+motion_axis_handle_t motion_axis[NAXIS];
 
-typedef struct {
-    motion_instruction_t axis_cmd[NAXIS];
-} move_group_instruction_t;
+// Topics
+#define TOPIC_STEPPER_POINT "/stepper_point"
+#define TOPIC_STEPPER_FB "/stepper_fb"
 
-void motion_task(void* arg) 
+// State management
+unsigned int execution_state = stepper_msgs__msg__StepperFeedback__STATUS_IDLE;
+
+// Publishers and subscribers
+rcl_publisher_t feedback_publisher;
+rcl_subscription_t stepper_point_subscriber;
+
+// Event group
+EventGroupHandle_t main_event_group;
+
+/* ============================ CALLBACKS ============================*/
+void stepper_point_callback(const void* msg_in)
+{
+    if (execution_state != stepper_msgs__msg__StepperFeedback__STATUS_IDLE) {
+        // Discard points if not in IDLE or LOADING state
+        ESP_LOGW(TAG, "Discarding point. Execution state: %u", execution_state);
+        return;
+    }
+
+    const stepper_msgs__msg__StepperPoint* msg = (const stepper_msgs__msg__StepperPoint*)msg_in;
+    if (msg->command == stepper_msgs__msg__StepperPoint__COMMAND_LOAD) {
+        for (int i = 0; i < NAXIS; ++i) {
+            motion_instruction_t cmd;
+            cmd.steps = msg->steps.data[i];
+            if (cmd.steps == 0) cmd.pulse_us = msg->duration_us;
+            else cmd.pulse_us = msg->duration_us / abs(cmd.steps);
+            motion_axis_load_trajectory(motion_axis[i], &cmd);
+            ESP_LOGI(TAG, "Loaded point on axis %d. steps=%hd, duration=%hu", i, cmd.steps, cmd.pulse_us);
+        }
+    }
+    if (msg->command == stepper_msgs__msg__StepperPoint__COMMAND_EXECUTE) {
+        xEventGroupSetBits(main_event_group, BIT0);
+    }
+}
+
+/* ============================ TASKS ============================*/
+void motion_task(void* arg)
 {
     ESP_LOGI(TAG, "Configuring motion axis");
+
+    motion_system_init();
+
     const int pulse_pins[] = {26, 14, 23, 33, 18, 21};
     const int dir_pins[] = {27, 13, 4, 25, 19, 22};
     for (int i = 0; i < NAXIS; ++i) {
         motion_axis[i] = motion_axis_create(pulse_pins[i], dir_pins[i]);
         motion_axis_reset(motion_axis[i]);
     }
-
-    motion_queue = xQueueCreate(32, sizeof(move_group_instruction_t));
-    if (!motion_queue) {
-        ESP_LOGE(TAG, "Failed to create motion queue");
-        return;
-    }
-
+    ESP_LOGI(TAG, "Motion setup succesfully. Starting transmission loop.");
     for (;;) {
-        move_group_instruction_t move;
-        if (xQueueReceive(motion_queue, &move, portMAX_DELAY)) {
+        // Wait for the event to start execution
+        xEventGroupWaitBits(main_event_group, BIT0, pdTRUE, pdFALSE, portMAX_DELAY);
+        ESP_LOGI(TAG, "Transmission event occured.");
+
+        if (execution_state == stepper_msgs__msg__StepperFeedback__STATUS_IDLE) {
             for (int i = 0; i < NAXIS; ++i) {
-                ESP_LOGI(TAG, "Executing move on axis %d: angle=%ld, duration=%hu",
-                     i, move.axis_cmd[i].steps, move.axis_cmd[i].pulse_us);
-                motion_axis_move(motion_axis[i], move.axis_cmd[i]);
+                motion_axis_execute(motion_axis[i]);
             }
+            execution_state = stepper_msgs__msg__StepperFeedback__STATUS_EXECUTE;
+            ESP_LOGI(TAG, "Execution transmitted. Execution state: %d", execution_state);
+            motion_event_await(motion_axis, NAXIS);
+            ESP_LOGI(TAG, "Execution finished. Execution state: %d", execution_state);
+            for (int i = 0; i < NAXIS; ++i) {
+                motion_axis_reset(motion_axis[i]);
+            }
+            execution_state = stepper_msgs__msg__StepperFeedback__STATUS_IDLE;
+            ESP_LOGI(TAG, "Axis has been reset. Execution state: %d", execution_state);
         }
-        
     }
 }
 
-void subscription_callback(const void* msg_in) 
+void publisher_task(void *arg)
 {
-    const stepper_msgs__msg__StepperTrajectoryPoint* msg = (const stepper_msgs__msg__StepperTrajectoryPoint*)msg_in;
+    ESP_LOGI(TAG, "publisher_task entry");
 
-    move_group_instruction_t move = {0};
+    stepper_msgs__msg__StepperFeedback feedback_msg;
+    int16_t memory[NAXIS];
+    feedback_msg.steps_executed.data = memory;
+    feedback_msg.steps_executed.capacity = NAXIS;
+    feedback_msg.steps_executed.size = 0;
+    feedback_msg.status = 0;
 
-    for (int i = 0; i < NAXIS; ++i) {
-        move.axis_cmd[i].steps = msg->steps.data[i];
-        if (abs(move.axis_cmd[i].steps) > 0) {
-            move.axis_cmd[i].pulse_us = msg->duration_us / move.axis_cmd[i].steps;
-        } else {
-            move.axis_cmd[i].pulse_us = 0;
-        }
-    }
-    if (xQueueSend(motion_queue, &move, 0) != pdTRUE) {
-        ESP_LOGE(TAG, "Failed to enqueue motion command");
-    }
-}
-
-void feedback_task(void *arg) 
-{
-    ESP_LOGI(TAG, "Feedback task entry");
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    ESP_LOGI(TAG, "start feedback publishing");
     for (;;) {
-        motion_event_await(motion_axis, NAXIS);
+        feedback_msg.steps_executed.size = 0;
+        for (int i = 0; i < NAXIS; ++i) {
+            feedback_msg.steps_executed.data[i] = motion_axis_get_feedback(motion_axis[i]);
+            feedback_msg.steps_executed.size++;
+        }
+        feedback_msg.status = (uint8_t)execution_state;
+        RCCHECK(rcl_publish(&feedback_publisher, &feedback_msg, NULL));
+        vTaskDelay(pdMS_TO_TICKS(200));
     }
+    // Clean up
+    free(feedback_msg.steps_executed.data);
 }
 
-void micro_ros_task(void * arg) 
+void micro_ros_task(void * arg)
 {
-	rcl_allocator_t allocator = rcl_get_default_allocator();
-	rclc_support_t support;
+    rcl_allocator_t allocator = rcl_get_default_allocator();
+    rclc_support_t support;
 
-	// Create init_options.
-	rcl_init_options_t init_options = rcl_get_zero_initialized_init_options();
-	RCCHECK(rcl_init_options_init(&init_options, allocator));
+    // Create init_options.
+    rcl_init_options_t init_options = rcl_get_zero_initialized_init_options();
+    RCCHECK(rcl_init_options_init(&init_options, allocator));
     RCCHECK(rcl_init_options_set_domain_id(&init_options, 1));
 
-	// Static Agent IP and port can be used instead of autodiscovery. 
-    /**/
+    // Static Agent IP and port can be used instead of autodiscovery.
     rmw_init_options_t* rmw_options = rcl_init_options_get_rmw_init_options(&init_options);
     const char ip[] = "192.168.0.10";
     const char port[] = "8888";
     RCCHECK(rmw_uros_options_set_udp_address(ip, port, rmw_options));
-    
 
-	// Setup support structure.
-	RCCHECK(rclc_support_init_with_options(&support, 0, NULL, &init_options, &allocator));
+    // Setup support structure.
+    RCCHECK(rclc_support_init_with_options(&support, 0, NULL, &init_options, &allocator));
 
-	// Create node.
+    // Create node.
     char node_name[64];
     snprintf(node_name, sizeof(node_name), "uros_esp32_robot_controller_%d", rand());
     rcl_node_t node = rcl_get_zero_initialized_node();
     RCCHECK(rclc_node_init_default(&node, node_name, "", &support));
+
+    // Create subscribers.
+    RCCHECK(rclc_subscription_init_default(
+        &stepper_point_subscriber,
+        &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(stepper_msgs, msg, StepperPoint),
+        TOPIC_STEPPER_POINT));
+
+    // Create publishers.
+    RCCHECK(rclc_publisher_init_default(
+        &feedback_publisher,
+        &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(stepper_msgs, msg, StepperFeedback),
+        TOPIC_STEPPER_FB));
+
+    // Create executor.
+    rclc_executor_t executor = rclc_executor_get_zero_initialized_executor();
+    RCCHECK(rclc_executor_init(&executor, &support.context, 4, &allocator));
+    unsigned int rcl_wait_timeout = 1000;   // in ms
+    RCCHECK(rclc_executor_set_timeout(&executor, RCL_MS_TO_NS(rcl_wait_timeout)));
+
+    // Allocate message memory on the stack.
+    stepper_msgs__msg__StepperPoint recv_point_msg;
+    int16_t point_steps[NAXIS];
+    recv_point_msg.steps.capacity = NAXIS;
+    recv_point_msg.steps.data = point_steps;
+    recv_point_msg.steps.size = 0;
+    recv_point_msg.command = 0;
+    recv_point_msg.duration_us = 0;
+
+    // Add subscribers to executor.
+    RCCHECK(rclc_executor_add_subscription(&executor, &stepper_point_subscriber, &recv_point_msg, &stepper_point_callback, ON_NEW_DATA));
     
-	// Create subscriber.
-    rcl_subscription_t subscriber;
-	RCCHECK(rclc_subscription_init_default(
-		&subscriber,
-		&node,
-		ROSIDL_GET_MSG_TYPE_SUPPORT(stepper_msgs, msg, StepperTrajectoryPoint),
-		"/cmd_point"));
+    // Spin forever.
+    while(1){
+        rclc_executor_spin_some(&executor, RCL_MS_TO_NS(100));
+    }
 
-	// Create executor.
-	rclc_executor_t executor = rclc_executor_get_zero_initialized_executor();
-	RCCHECK(rclc_executor_init(&executor, &support.context, 2, &allocator));
-	unsigned int rcl_wait_timeout = 1000;   // in ms
-	RCCHECK(rclc_executor_set_timeout(&executor, RCL_MS_TO_NS(rcl_wait_timeout)));
+    // Free resources.
+    RCCHECK(rcl_subscription_fini(&stepper_point_subscriber, &node));
+    RCCHECK(rcl_publisher_fini(&feedback_publisher, &node));
+    RCCHECK(rcl_node_fini(&node));
 
-    // Allocate message memory
-    stepper_msgs__msg__StepperTrajectoryPoint recv_msg;
-    int32_t msg_steps[NAXIS];
-    recv_msg.steps.capacity = NAXIS;
-    recv_msg.steps.data = msg_steps;
-    recv_msg.steps.size = 0;
-    recv_msg.duration_us = 0; 
-
-	// Add subscriber to executor.
-    RCCHECK(rclc_executor_add_subscription(&executor, &subscriber, &recv_msg, &subscription_callback, ON_NEW_DATA));
-
-	// Spin forever.
-	while(1){
-		rclc_executor_spin_some(&executor, RCL_MS_TO_NS(10));
-        //rclc_sleep_ms(100);
-	}
-
-	// Free resources.
-	RCCHECK(rcl_subscription_fini(&subscriber, &node));
-	RCCHECK(rcl_node_fini(&node));
-
-  	vTaskDelete(NULL);
+    vTaskDelete(NULL);
 }
 
+/* ============================ APP MAIN ============================*/
 void app_main() 
 {   
-    esp_log_level_set("*", ESP_LOG_WARN);
+    esp_log_level_set("*", ESP_LOG_INFO);
     network_init();
-    motion_system_init();
+    main_event_group = xEventGroupCreate();
     xTaskCreate(motion_task, "motion_task", 4096, NULL, 5, NULL);
-    xTaskCreate(feedback_task, "feedback_task", 4096, NULL, 5, NULL);
-    xTaskCreate(micro_ros_task, "uros_task", 32000, NULL, 5, NULL);
+    xTaskCreate(micro_ros_task, "uros_task", 4096, NULL, 5, NULL);
+    //xTaskCreate(publisher_task, "publisher_task", 2048, NULL, 5, NULL);
 }
