@@ -76,13 +76,14 @@ void motion_task(void* arg)
     ESP_LOGI(TAG, "Configuring motion axis");
 
     motion_system_init();
-
+    
     const int pulse_pins[] = {26, 14, 23, 33, 18, 21};
     const int dir_pins[] = {27, 13, 4, 25, 19, 22};
     for (int i = 0; i < NAXIS; ++i) {
         motion_axis[i] = motion_axis_create(pulse_pins[i], dir_pins[i]);
         motion_axis_reset(motion_axis[i]);
     }
+    
     ESP_LOGI(TAG, "Motion setup succesfully. Starting transmission loop.");
     for (;;) {
         // Wait for the event to start execution
@@ -95,7 +96,7 @@ void motion_task(void* arg)
             }
             execution_state = stepper_msgs__msg__StepperFeedback__STATUS_EXECUTE;
             ESP_LOGI(TAG, "Execution transmitted. Execution state: %d", execution_state);
-            motion_event_await(motion_axis, NAXIS);
+            motion_event_await();
             ESP_LOGI(TAG, "Execution finished. Execution state: %d", execution_state);
             for (int i = 0; i < NAXIS; ++i) {
                 motion_axis_reset(motion_axis[i]);
@@ -122,7 +123,7 @@ void publisher_task(void *arg)
     for (;;) {
         feedback_msg.steps_executed.size = 0;
         for (int i = 0; i < NAXIS; ++i) {
-            feedback_msg.steps_executed.data[i] = motion_axis_get_feedback(motion_axis[i]);
+            feedback_msg.steps_executed.data[i] = i; //TODO
             feedback_msg.steps_executed.size++;
         }
         feedback_msg.status = (uint8_t)execution_state;

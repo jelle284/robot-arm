@@ -15,12 +15,12 @@ class MinimalPublisher(Node):
     def timer_callback(self):
         if self.current_count < self.publish_count:
             # Publish StepperTrajectoryPoint messages
-            seq = [4, 8, 2]
+            seq = [8, -16, 8, -8]
             for s in seq:
                 msg = StepperPoint()
                 msg.command = StepperPoint.COMMAND_LOAD
                 msg.steps = [s, 0, 0, 0, 0, 0]  # Sequence length of six
-                msg.duration_us = 8 * 1000  # Example duration
+                msg.duration_us = 16 * 1000  # Example duration
                 self.point_publisher_.publish(msg)
                 self.get_logger().info(f'Publishing point: "{msg.steps}, {msg.duration_us}" ({self.current_count + 1}/{self.publish_count})')
 

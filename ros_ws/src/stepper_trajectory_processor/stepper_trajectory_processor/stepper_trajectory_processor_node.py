@@ -3,9 +3,9 @@ from rclpy.action import ActionServer
 from rclpy.node import Node
 from rclpy.action.server import ServerGoalHandle
 from control_msgs.action import FollowJointTrajectory
-from trajectory_msgs.msg import JointTrajectory
-from stepper_msgs.msg import StepperTrajectory
-from std_msgs.msg import String, Int32MultiArray
+from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+from stepper_msgs.msg import StepperTrajectoryPoint
+from std_msgs.msg import String, Int32MultiArray, Float64MultiArray
 import time
 import stepper_joint_conversion as cvt
     
@@ -23,8 +23,9 @@ class StepperTrajectoryProcessor(Node):
 
         # Publisher for stepper commands
         self._stepper_publisher = self.create_publisher(
-            StepperTrajectory,
-            '/stepper_cmd',
+            StepperTrajectoryPoint,
+            #'/stepper_cmd',
+            '/cmd_point',
             10  # QoS depth
         )
         # Subscriber for stepper status
@@ -60,48 +61,38 @@ class StepperTrajectoryProcessor(Node):
         self.executed_points += 1
 
     async def execute_callback(self, goal_handle: ServerGoalHandle):
+        result = FollowJointTrajectory.Result()
         trajectory: JointTrajectory = goal_handle.request.trajectory
         self.get_logger().info("Goal handle recieved")
 
-        # Convert and publish stepper instructions
-        stepper_trajectory: StepperTrajectory = cvt.convert_joint_to_stepper_trajectory(trajectory, self.motor_config)
-        self._stepper_publisher.publish(stepper_trajectory)
+        # Process trajectory points
+        prev_point = None
+        
+        for point in trajectory.points:
+            point: JointTrajectoryPoint
+            N = len(point.positions)
+            if not prev_point:
+                prev_point = point
+                continue
+            stepper_point = StepperTrajectoryPoint()
+            stepper_point.steps = [0]*N
+            # Calculate delta time
+            delta_sec = point.time_from_start.sec - prev_point.time_from_start.sec
+            delta_nanosec = point.time_from_start.nanosec - prev_point.time_from_start.nanosec
+            stepper_point.duration_us = int(1e6*delta_sec + delta_nanosec*1e-3)
+            if stepper_point.duration_us == 0: continue
 
-        # Reset state variables
-        self.ack_received = False
-        self.executed_points = 0
-
-        # Wait for acknowledgment with timeout
-        start_time = time.time()
-        while not self.ack_received:
-            rclpy.spin_once(self, timeout_sec=0.1)
-            if time.time() - start_time > 5.0:  # 5 seconds timeout
-                self.get_logger().error("Timeout waiting for ACK")
-                goal_handle.abort()
-                result = FollowJointTrajectory.Result()
-                result.error_code = FollowJointTrajectory.Result.PATH_TOLERANCE_VIOLATED
-                return result
-
-        # Wait for all steps to be executed with timeout
-        start_time = time.time()
-        while self.executed_points < len(stepper_trajectory.points):
-            rclpy.spin_once(self, timeout_sec=0.1)
-            if time.time() - start_time > 30.0:  # 30 seconds timeout
-                self.get_logger().error("Timeout waiting for step execution")
-                goal_handle.abort()
-                result = FollowJointTrajectory.Result()
-                result.error_code = FollowJointTrajectory.Result.GOAL_TOLERANCE_VIOLATED
-                return result
-            #TODO: Feedback
-
-        # Update the joint state variable and save to file
-        if trajectory.points:
-            self.current_joint_states["positions"] = list(trajectory.points[-1].positions)
-            self.save_joint_states()
-
+            # Calculate delta movement
+            joint_delta = Float64MultiArray()
+            joint_delta.data = [0] * N
+            for i in range(N):
+                joint_delta.data[i] = point.positions[i] - prev_point.positions[i]
+            steps = cvt.convert_joint_to_steps(joint_delta, self.motor_config)
+            stepper_point.steps = steps.data
+            self._stepper_publisher.publish(stepper_point)
+            prev_point = point
         # Mark the goal as succeeded
         goal_handle.succeed()
-        result = FollowJointTrajectory.Result()
         self.get_logger().info("Goal execution complete")
         return result
 

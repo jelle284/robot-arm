@@ -20,10 +20,10 @@ void motion_axis_reset(motion_axis_handle_t axis_handle);
 
 void motion_axis_execute(motion_axis_handle_t axis_handle);
 
+void motion_execute_all();
+
 void motion_axis_stop(motion_axis_handle_t axis_handle);
 
-void motion_event_await(motion_axis_handle_t axis_handle[], size_t group_size);
-
-int16_t motion_axis_get_feedback(motion_axis_handle_t axis_handle);
+void motion_event_await();
 
 #endif // MOTION_H
