@@ -11,6 +11,7 @@
 #define ALL_TX_DONE_BITS (BIT0 | BIT1 | BIT2 | BIT3 | BIT4 | BIT5)
 #define MAX_DATA_SIZE 256
 #define MAX_AXIS_NUM 6
+#define FB_RDY_BIT BIT15
 
 motion_axis_handle_t axes[MAX_AXIS_NUM];
 size_t axis_index_tracker;
@@ -34,6 +35,7 @@ struct motion_axis_t {
     size_t data_size;
     size_t execution_index;
     int64_t execution_time;
+    volatile int16_t feedback_counter;
 };
 
 size_t stepper_encoder_cb(const void *data, size_t data_size,
@@ -87,8 +89,20 @@ void log_event_bits(EventBits_t bits)
     ESP_LOGI("motion", "Event group bits: %s", binary_str);
 }
 
+void log_feedback(int16_t fb[]) {
+    char log_message[256];  // Adjust size as needed
+    int offset = sprintf(log_message, "Feedback ready: ");
+
+    for (int i = 0; i < axis_index_tracker; ++i) {
+        offset += sprintf(log_message + offset, "%hd ", fb[i]);
+    }
+
+    ESP_LOGI("motion", "%s", log_message);
+}
+
 void IRAM_ATTR execution_control_callback(void *arg) {
     motion_instruction_t instr;
+    bool fb_rdy = false;
     for (int i = 0; i < axis_index_tracker; ++i) {
         motion_axis_handle_t axis_handle = axes[i];
         if (axis_handle->execution_index >= axis_handle->data_size) { continue; }
@@ -97,12 +111,18 @@ void IRAM_ATTR execution_control_callback(void *arg) {
         int64_t elapsed = now - axis_handle->execution_time;
         int64_t duration = abs(instr.steps) * instr.pulse_us;
         if (elapsed >= duration) {
+            axis_handle->feedback_counter += instr.steps;
             axis_handle->execution_time += duration;
             axis_handle->execution_index++;
             instr = axis_handle->data[axis_handle->execution_index];
             gpio_set_level(axis_handle->dir_pin, (instr.steps < 0) ? 1 : 0);
-            //ESP_LOGI("motion", "axis %u processed instruction %u", axis_handle->axis_index, axis_handle->execution_index);
+            fb_rdy = true;
         }
+    }
+    if (fb_rdy) {
+        BaseType_t need_yield = pdFALSE;
+        xEventGroupSetBitsFromISR(motion_event_group, FB_RDY_BIT, &need_yield);
+        if (need_yield == pdTRUE) { esp_timer_isr_dispatch_need_yield(); }
     }
 }
 
@@ -137,6 +157,7 @@ motion_axis_handle_t motion_axis_create(int pul_pin, int dir_pin) {
     axis_handle->data_size = 0;
     axis_handle->execution_time = 0;
     axis_handle->execution_index = 0;
+    axis_handle->feedback_counter = 0;
 
     gpio_config_t io_conf = {};
     io_conf.intr_type = GPIO_INTR_DISABLE;
@@ -207,6 +228,7 @@ void motion_axis_execute(motion_axis_handle_t axis_handle) {
     };
     axis_handle->execution_time = esp_timer_get_time();
     axis_handle->execution_index = 0;
+    axis_handle->feedback_counter = 0;
     motion_instruction_t instr = axis_handle->data[axis_handle->execution_index];
     gpio_set_level(axis_handle->dir_pin, (instr.steps < 0) ? 1 : 0);
     ESP_ERROR_CHECK(rmt_transmit(axis_handle->channel, axis_handle->encoder, axis_handle->data, axis_handle->data_size, &tx_config));
@@ -225,7 +247,7 @@ void motion_group_execute(motion_axis_handle_t axis_handle[], size_t group_size)
     // TODO: something with sync manager?
 }
 
-void motion_event_await()
+int motion_event_await()
 {
     EventBits_t bits = xEventGroupWaitBits(motion_event_group, ALL_TX_DONE_BITS, pdFALSE, pdTRUE, portMAX_DELAY);
     log_event_bits(bits);
@@ -234,5 +256,21 @@ void motion_event_await()
         ESP_LOGI("motion", "All transmissions complete");
         // Reset the event group for future use
         xEventGroupClearBits(motion_event_group, ALL_TX_DONE_BITS);
+        return 1;
     }
+    if (bits & FB_RDY_BIT) {
+        int16_t fb[MAX_AXIS_NUM];
+        for (int i = 0; i < axis_index_tracker; ++i) {
+            fb[i] = motion_axis_get_feedback(axes[i]);
+        }
+        log_feedback(fb);
+        xEventGroupClearBits(motion_event_group, FB_RDY_BIT);
+    }
+    return 0;
+}
+
+int16_t motion_axis_get_feedback(motion_axis_handle_t axis_handle) {
+    int16_t feedback_counter = axis_handle->feedback_counter;
+    axis_handle->feedback_counter = 0;
+    return feedback_counter;
 }

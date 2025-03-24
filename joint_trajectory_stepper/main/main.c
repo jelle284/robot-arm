@@ -96,7 +96,7 @@ void motion_task(void* arg)
             }
             execution_state = stepper_msgs__msg__StepperFeedback__STATUS_EXECUTE;
             ESP_LOGI(TAG, "Execution transmitted. Execution state: %d", execution_state);
-            motion_event_await();
+            while(motion_event_await() == 0) { }
             ESP_LOGI(TAG, "Execution finished. Execution state: %d", execution_state);
             for (int i = 0; i < NAXIS; ++i) {
                 motion_axis_reset(motion_axis[i]);
@@ -109,6 +109,7 @@ void motion_task(void* arg)
 
 void publisher_task(void *arg)
 {
+    /*
     ESP_LOGI(TAG, "publisher_task entry");
 
     stepper_msgs__msg__StepperFeedback feedback_msg;
@@ -132,7 +133,9 @@ void publisher_task(void *arg)
     }
     // Clean up
     free(feedback_msg.steps_executed.data);
+    */
 }
+    
 
 void micro_ros_task(void * arg)
 {

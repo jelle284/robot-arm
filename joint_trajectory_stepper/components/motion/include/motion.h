@@ -24,6 +24,8 @@ void motion_execute_all();
 
 void motion_axis_stop(motion_axis_handle_t axis_handle);
 
-void motion_event_await();
+int motion_event_await();
+
+int16_t motion_axis_get_feedback(motion_axis_handle_t axis_handle);
 
 #endif // MOTION_H
