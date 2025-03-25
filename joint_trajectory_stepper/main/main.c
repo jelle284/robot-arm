@@ -59,8 +59,32 @@ void stepper_point_callback(const void* msg_in)
         for (int i = 0; i < NAXIS; ++i) {
             motion_instruction_t cmd;
             cmd.steps = msg->steps.data[i];
-            if (cmd.steps == 0) cmd.pulse_us = msg->duration_us;
-            else cmd.pulse_us = msg->duration_us / abs(cmd.steps);
+            // If we have zero steps we just make 1 ms zero level pulses
+            if (cmd.steps == 0) {
+                cmd.steps = msg->duration_ms;
+                cmd.pulse_us = 1000;
+                cmd.level = 0;
+            } else {
+                // first we check for potential overflow in pulse micros
+                // if we have overflow we shorten the duration and add an extra delay instruction
+                // to make up the time
+                uint32_t temp_us = (1000*msg->duration_ms) / abs(cmd.steps);
+                if (temp_us > UINT16_MAX) { 
+                    ESP_LOGW(TAG, "overflow in pulse width!");
+                    uint16_t max_duration_ms = abs(cmd.steps)*(UINT16_MAX/1000);
+                    uint16_t delay_ms = msg->duration_ms - max_duration_ms;
+                    motion_instruction_t delay_cmd = {
+                        .level = 0,
+                        .steps = delay_ms,
+                        .pulse_us = 1000
+                    };
+                    motion_axis_load_trajectory(motion_axis[i], &delay_cmd);
+                    temp_us = UINT16_MAX;
+                    ESP_LOGW(TAG, "Overflow in pulse width. Inserting delay of %hu", delay_ms);
+                } 
+                cmd.pulse_us = temp_us;
+                cmd.level = 1;
+            }
             motion_axis_load_trajectory(motion_axis[i], &cmd);
             ESP_LOGI(TAG, "Loaded point on axis %d. steps=%hd, duration=%hu", i, cmd.steps, cmd.pulse_us);
         }
@@ -189,7 +213,7 @@ void micro_ros_task(void * arg)
     recv_point_msg.steps.data = point_steps;
     recv_point_msg.steps.size = 0;
     recv_point_msg.command = 0;
-    recv_point_msg.duration_us = 0;
+    recv_point_msg.duration_ms = 0;
 
     // Add subscribers to executor.
     RCCHECK(rclc_executor_add_subscription(&executor, &stepper_point_subscriber, &recv_point_msg, &stepper_point_callback, ON_NEW_DATA));

@@ -6,6 +6,7 @@
 typedef struct {
     int16_t steps;
     uint16_t pulse_us;
+    uint16_t level;
 } motion_instruction_t;
 
 typedef struct motion_axis_t* motion_axis_handle_t;

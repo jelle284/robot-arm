@@ -49,7 +49,7 @@ size_t stepper_encoder_cb(const void *data, size_t data_size,
     size_t i = 0;
     *done = false;
     while (i < symbols_free) {
-        symbols[i].level0 = (cmd[idx].steps == 0) ? 0 : 1;
+        symbols[i].level0 = cmd[idx].level;
         symbols[i].duration0 = cmd[idx].pulse_us / 2;
         symbols[i].level1 = 0;
         symbols[i].duration1 = cmd[idx].pulse_us / 2;
@@ -111,7 +111,9 @@ void IRAM_ATTR execution_control_callback(void *arg) {
         int64_t elapsed = now - axis_handle->execution_time;
         int64_t duration = abs(instr.steps) * instr.pulse_us;
         if (elapsed >= duration) {
-            axis_handle->feedback_counter += instr.steps;
+            if (instr.level == 1) {
+                axis_handle->feedback_counter += instr.steps;
+            }
             axis_handle->execution_time += duration;
             axis_handle->execution_index++;
             instr = axis_handle->data[axis_handle->execution_index];

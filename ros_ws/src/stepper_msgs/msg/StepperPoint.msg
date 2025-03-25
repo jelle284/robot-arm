@@ -1,5 +1,5 @@
 int16[] steps
-uint16 duration_us
+uint16 duration_ms
 uint8 command
 
 # enumerate commands
