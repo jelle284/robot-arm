@@ -2,52 +2,44 @@ import yaml
 import os
 from ament_index_python.packages import get_package_share_directory
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
-from stepper_msgs.msg import StepperTrajectory, StepperTrajectoryPoint
-from std_msgs.msg import Int32MultiArray, Float64MultiArray
+from stepper_msgs.msg import StepperTrajectory, StepperPoint
+from array import array
+import numpy as np
 
-PI = 3.14159265359
-
-def rad2turns(rad):
-    """
-    converts angle in radians to number of turns
-    """
-    return rad/(2*PI)
-def turns2rad(turns):
-    """
-    converts numberof turns to angle in radians
-    """
-    return turns*(2*PI)
-
-def load_config(filename):
+def load_config(filename, local=False):
     """
     Loads motor yaml config file
     """
     package_share_directory = get_package_share_directory('stepper_trajectory_processor')
-    config_file_path = os.path.join(package_share_directory, 'config', filename)
+    if local:
+
+        config_file_path = os.path.join('ros_ws','src', 'stepper_trajectory_processor', 'config', filename)
+    else:
+        config_file_path = os.path.join(package_share_directory, 'config', filename)
     with open(config_file_path, 'r') as file:
         motor_config = yaml.safe_load(file)
         return motor_config
-    
-def convert_joint_to_steps(positions: Float64MultiArray, config: dict):
-    steps = Int32MultiArray()
-    steps.data = [0] * len(positions.data)
-    for i, motor in enumerate(config["motors"].values()):
-        motor_steps = 0
-        for joint in motor["joints"]:
-            motor_steps += joint["ratio"]*rad2turns(positions.data[joint["index"]])* motor["step_resolution"] * motor["gear_ratio"]
-        steps.data[i] = int(motor_steps)
-    return steps
-        
 
-def convert_steps_to_joint(steps: Int32MultiArray, config: dict):
-    positions = Float64MultiArray()
-    positions.data = [0.0] * len(steps.data)
-    for step, motor in zip(steps.data, config["motors"].values()):
-        for joint in motor["joints"]:
-            act_turns = step / (motor["step_resolution"] * motor["gear_ratio"])
-            joint_turns = joint["ratio"] * act_turns
-            positions.data[joint["index"]] += turns2rad(joint_turns)
-    return positions
+def make_tf(config: dict):
+    """
+    returns: the transform and the inverse transform
+    """
+    motors = config["motors"]
+    tf = np.zeros((config["num_joints"],len(motors)))
+    for i, k in enumerate(motors):
+        val = motors[k]
+        act_ratio = 1.0 / (val["gear_ratio"]*val["step_resolution"])
+        for joint in val["joints"]:
+            tf[joint["index"], i] = 2*np.pi*act_ratio*joint["ratio"]
+    return tf, np.linalg.pinv(tf)
+
+def convert_joint_to_steps(positions: array, inv_tf: np.array):
+    steps = inv_tf@positions
+    return array('i', steps.astype(int).tolist())
+
+def convert_steps_to_joint(steps: array, tf: np.array):
+    joints = tf@steps
+    return array('d', joints.tolist())
 
 def convert_joint_to_stepper_trajectory(joint_trajectory: JointTrajectory, config):
     """
@@ -72,7 +64,7 @@ def convert_joint_to_stepper_trajectory(joint_trajectory: JointTrajectory, confi
         if not prev_point:
             prev_point = point
             continue
-        stepper_point = StepperTrajectoryPoint()
+        stepper_point = StepperPoint()
 
         # Calculate delta time
         delta_sec = point.time_from_start.sec - prev_point.time_from_start.sec
@@ -118,14 +110,11 @@ def convert_joint_to_stepper_trajectory(joint_trajectory: JointTrajectory, confi
     return stepper_trajectory
 
 if __name__ == '__main__':
-    import random
-    joints = Float64MultiArray()
-    joints.data = [1.0] * 6
-    #joints.data = [random.random() for _ in range(6)]
-    config = load_config("motors.yaml")
-    steps = convert_joint_to_steps(joints, config)
-    re_joints = convert_steps_to_joint(steps, config)
-    print(joints.data)
-    print(steps.data)
-    print(re_joints.data)
-    print([joints.data[i]-re_joints.data[i] for i in range(6)])
+    config = load_config("motors.yaml", local=True)
+    tf, inv_tf = make_tf(config)
+    joints = array('d', [1.0]*6)
+    steps = convert_joint_to_steps(joints, inv_tf)
+    re_joints = convert_steps_to_joint(steps, tf)
+    print(joints)
+    print(steps)
+    print(re_joints)

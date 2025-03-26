@@ -1,3 +1,4 @@
+num_joints: 6
 motors:
   motor1:
     gear_ratio: 140.0

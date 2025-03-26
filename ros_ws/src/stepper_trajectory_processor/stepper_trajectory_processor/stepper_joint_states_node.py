@@ -1,11 +1,18 @@
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import String, Int32MultiArray
-from stepper_msgs.msg import StepperTrajectory, StepperTrajectoryPoint
+from stepper_msgs.msg import StepperTrajectory, StepperPoint, StepperFeedback
 from sensor_msgs.msg import JointState
 import json
 import os
 import stepper_joint_conversion
+
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
+QOS = QoSProfile(
+    reliability=ReliabilityPolicy.BEST_EFFORT,
+    durability=DurabilityPolicy.VOLATILE,
+    history=HistoryPolicy.KEEP_LAST,
+    depth=10
+)
 
 class StepperJointStates(Node):
     def __init__(self):
@@ -13,34 +20,37 @@ class StepperJointStates(Node):
 
         # Subscriber for stepper count
         self._stepper_cnt_subscriber = self.create_subscription(
-            Int32MultiArray,
-            '/stepper_cnt',
-            self.stepper_cnt_callback,
-            10
+            StepperFeedback,
+            '/stepper_fb',
+            self.stepper_fb_callback,
+            QOS
         )
 
         # Publisher for joint states
         self._joint_state_publisher = self.create_publisher(
             JointState,
             '/joint_states',
-            10  # QoS depth
+            10
         )
 
         # Load motor configuration file
-        self.motor_config = stepper_joint_conversion.load_config("motors.yaml")
-
+        motor_conf = stepper_joint_conversion.load_config("motors.yaml")
+        tf, inv_tf = stepper_joint_conversion.make_tf(motor_conf)
+        self.tf = tf
+        self.inv_tf = inv_tf
         # Load initial joint states from file
         self.joint_state_file = "joint_states.json"
         self.current_joint_states = self.load_joint_states()
         # Periodic publishing of joint states
         self.timer = self.create_timer(1.0, self.publish_joint_states)  # Publish every 1 second
 
-    def stepper_cnt_callback(self, msg: Int32MultiArray):
-        joint_delta = stepper_joint_conversion.convert_steps_to_joint(msg, self.motor_config)
+    def stepper_fb_callback(self, msg: StepperFeedback):
+        joint_delta = stepper_joint_conversion.convert_steps_to_joint(msg.steps_executed, self.tf)
+
         for i in range(min(
             [len(joint_delta),len(self.current_joint_states)]
             )):
-            self.current_joint_states[i] += joint_delta[i]
+            self.current_joint_states["positions"][i] += joint_delta[i]
 
     def load_joint_states(self):
         """Load joint states from a JSON file."""
