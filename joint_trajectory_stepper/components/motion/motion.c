@@ -9,8 +9,8 @@
 
 #define ALL_TX_DONE_BITS (BIT0 | BIT1 | BIT2 | BIT3 | BIT4 | BIT5)
 #define FB_RDY_BIT BIT15
-
-#define TIMER_INTERVAL_US 200
+#define MOTION_BUFFER_SIZE 256
+#define TIMER_INTERVAL_US 250
 
 motion_axis_handle_t axes[MOTION_AXIS_NUM];
 size_t axis_index_tracker;
@@ -32,7 +32,7 @@ struct motion_axis_t {
     size_t data_size;
     volatile size_t execution_index;
     volatile int64_t execution_time;
-    volatile int32_t execution_feedback;
+    volatile int32_t execution_steps;
     volatile int8_t execution_status;
 };
 
@@ -90,7 +90,7 @@ void IRAM_ATTR execution_control_callback(void *arg) {
         int64_t duration = abs(instr.steps) * instr.pulse_us;
         if (elapsed >= duration) {
             if (instr.level == 1) {
-                axis_handle->execution_feedback += instr.steps;
+                axis_handle->execution_steps += instr.steps;
                 fb_rdy = true;
             }
             axis_handle->execution_time += duration;
@@ -144,7 +144,7 @@ motion_axis_handle_t motion_axis_create(int pul_pin, int dir_pin) {
     axis_handle->data_size = 0;
     axis_handle->execution_time = 0;
     axis_handle->execution_index = 0;
-    axis_handle->execution_feedback = 0;
+    axis_handle->execution_steps = 0;
     axis_handle->execution_status = 0;
 
     gpio_config_t io_conf = {};
@@ -218,7 +218,7 @@ void motion_axis_execute(motion_axis_handle_t axis_handle) {
     gpio_set_level(axis_handle->dir_pin, (axis_handle->data[0].steps < 0) ? 1 : 0);
     axis_handle->execution_time = esp_timer_get_time();
     axis_handle->execution_index = 0;
-    axis_handle->execution_feedback = 0;
+    axis_handle->execution_steps = 0;
     axis_handle->execution_status = 1;
     ESP_ERROR_CHECK(rmt_transmit(axis_handle->channel, axis_handle->encoder, axis_handle->data, axis_handle->data_size, &tx_config));
     ESP_LOGI("motion", "Transmitting on axis %u", axis_handle->axis_index);
@@ -242,12 +242,18 @@ void motion_await_done()
         ESP_LOGI("motion", "All transmissions complete");
         xEventGroupClearBits(motion_event_group, ALL_TX_DONE_BITS);
     }
+    esp_timer_dump(stdout);
 }
 
-void motion_get_feedback(int32_t *feedback) {
-    xEventGroupWaitBits(motion_event_group, FB_RDY_BIT, pdFALSE, pdFALSE, portMAX_DELAY);
+int motion_get_state(motion_execution_state_t *state) {
+    EventBits_t bits = xEventGroupGetBits(motion_event_group);
+    if (bits & FB_RDY_BIT)
     for (int i = 0; i < axis_index_tracker; ++i) {
-        feedback[i] = axes[i]->execution_feedback;
+        state->steps_executed[i] = axes[i]->execution_steps;
+        state->current_point = axes[i]->execution_index;
+        state->total_points = axes[i]->data_size;
+        xEventGroupClearBits(motion_event_group, FB_RDY_BIT);
+        return 1;
     }
-    xEventGroupClearBits(motion_event_group, FB_RDY_BIT);
+    return 0;
 }

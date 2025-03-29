@@ -20,6 +20,7 @@
 #include "stepper_msgs/msg/stepper_trajectory.h"
 #include "stepper_msgs/msg/stepper_feedback.h"
 #include "std_msgs/msg/string.h"
+#include "std_msgs/msg/int32.h"
 
 // ROS2 error checking
 #define RCCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){printf("Failed status on line %d: %d. Aborting.\n",__LINE__,(int)temp_rc);vTaskDelete(NULL);}}
@@ -32,12 +33,18 @@ static const char* TAG = "main";
 motion_axis_handle_t motion_axis[MOTION_AXIS_NUM];
 
 // Topics
-#define TOPIC_STEPPER_POINT "/stepper_point"
+#define TOPIC_STEPPER_CMD "/stepper_cmd"
 #define TOPIC_STEPPER_FB "/stepper_fb"
+#define TOPIC_STEPPER_TEST "/stepper_test"
 
 // Publishers and subscribers
 rcl_publisher_t feedback_publisher;
-rcl_subscription_t stepper_point_subscriber;
+rcl_subscription_t stepper_cmd_subscriber;
+
+// Messages
+#define MAX_STEPPER_POINTS 32
+stepper_msgs__msg__StepperFeedback msg_feedback;
+stepper_msgs__msg__StepperTrajectory msg_trajectory;
 
 // Event group
 EventGroupHandle_t main_event_group;
@@ -77,6 +84,7 @@ void process_axis(const stepper_msgs__msg__StepperPoint* point, size_t axis_num)
     }
     motion_axis_load_trajectory(motion_axis[axis_num], cmd);
 }
+
 void stepper_trajectory_callback(const void* msg_in)
 {
     const stepper_msgs__msg__StepperTrajectory* msg = (const stepper_msgs__msg__StepperTrajectory*)msg_in;
@@ -87,8 +95,24 @@ void stepper_trajectory_callback(const void* msg_in)
             process_axis(&point, n);
         }
     }
+    
     // Notify execution start
-    xEventGroupSetBits(main_event_group, BIT1);
+    if (msg->partial_count == msg->partial_total) {
+        msg_feedback.transmission_id = msg->transmission_id;
+        xEventGroupSetBits(main_event_group, BIT1);
+    }
+}
+
+void stepper_trajectory_debug_callback(const void* msg_in) {
+    const stepper_msgs__msg__StepperTrajectory* msg = (const stepper_msgs__msg__StepperTrajectory*)msg_in;
+    ESP_LOGI(TAG,
+        "Trajectory recieved: transmission id: %lu, \
+        number of points: %u, \
+        partial %hu of %hu.",
+        msg->transmission_id, 
+        msg->points.size,
+        msg->partial_count, msg->partial_total
+    );
 }
 
 /* ============================ TASKS ============================*/
@@ -122,37 +146,25 @@ void motion_task(void* arg)
     }
 }
 
-void publisher_task(void *arg)
+void publish_callback(rcl_timer_t * timer, int64_t last_call_time)
 {
-    int32_t feedback[MOTION_AXIS_NUM];
-    for (;;) {
-        motion_get_feedback(feedback);
-
-        /* Log feedback */
-        if (esp_log_level_get(TAG) == ESP_LOG_INFO) {
-            char log_message[256];
-            int offset = sprintf(log_message, "Feedback ready: ");
-            for (int i = 0; i < MOTION_AXIS_NUM; ++i) {
-                offset += sprintf(log_message + offset, "%ld ", feedback[i]);
-            }
-            ESP_LOGI(TAG, "%s", log_message);
+	(void) last_call_time;
+	if (timer != NULL) {
+        motion_execution_state_t state;
+        if(motion_get_state(&state) > 0) {
+            msg_feedback.steps_executed.data = state.steps_executed;
+            msg_feedback.steps_executed.capacity = MOTION_AXIS_NUM;
+            msg_feedback.steps_executed.size = MOTION_AXIS_NUM;
+            msg_feedback.current_point = state.current_point;
+            msg_feedback.total_points = state.total_points;
+            RCCHECK(rcl_publish(&feedback_publisher, &msg_feedback, NULL));
         }
-        
-        /* Publish feedback */
-        stepper_msgs__msg__StepperFeedback feedback_msg;
-        feedback_msg.steps_executed.data = feedback;
-        feedback_msg.steps_executed.capacity = MOTION_AXIS_NUM;
-        feedback_msg.steps_executed.size = MOTION_AXIS_NUM;
-        // TODO: real values for points
-        feedback_msg.current_point = 0;
-        feedback_msg.total_points = 0;
-        RCCHECK(rcl_publish(&feedback_publisher, &feedback_msg, NULL));
-    }
+	}
 }
-    
 
 void micro_ros_task(void * arg)
 {
+    ESP_LOGI(TAG,"Micro-ros task entry.");
     rcl_allocator_t allocator = rcl_get_default_allocator();
     rclc_support_t support;
 
@@ -176,63 +188,84 @@ void micro_ros_task(void * arg)
     rcl_node_t node = rcl_get_zero_initialized_node();
     RCCHECK(rclc_node_init_default(&node, node_name, "", &support));
 
-    // Create subscribers.
-    RCCHECK(rclc_subscription_init_best_effort(
-        &stepper_point_subscriber,
-        &node,
-        ROSIDL_GET_MSG_TYPE_SUPPORT(stepper_msgs, msg, StepperTrajectory),
-        TOPIC_STEPPER_POINT));
-
-    // Create publishers.
-    RCCHECK(rclc_publisher_init_best_effort(
-        &feedback_publisher,
-        &node,
-        ROSIDL_GET_MSG_TYPE_SUPPORT(stepper_msgs, msg, StepperFeedback),
-        TOPIC_STEPPER_FB));
-
     // Create executor.
     rclc_executor_t executor = rclc_executor_get_zero_initialized_executor();
-    RCCHECK(rclc_executor_init(&executor, &support.context, 4, &allocator));
-    unsigned int rcl_wait_timeout = 1000;   // in ms
+    RCCHECK(rclc_executor_init(&executor, &support.context, 2, &allocator));
+    unsigned int rcl_wait_timeout = 2000;   // in ms
     RCCHECK(rclc_executor_set_timeout(&executor, RCL_MS_TO_NS(rcl_wait_timeout)));
 
-    // Allocate memory for StepperTrajectory
-    stepper_msgs__msg__StepperTrajectory msg_trajectory;
+    // Set Quality of service
+    rmw_qos_profile_t qos;
+    qos = rmw_qos_profile_default;
+    qos.durability = RMW_QOS_POLICY_DURABILITY_VOLATILE;
+    qos.history = RMW_QOS_POLICY_HISTORY_SYSTEM_DEFAULT;
+    qos.reliability = RMW_QOS_POLICY_RELIABILITY_RELIABLE;
+    qos.depth=1;
 
-    stepper_msgs__msg__StepperPoint msg_points[MOTION_BUFFER_SIZE];
-    int16_t points_data[MOTION_BUFFER_SIZE][MOTION_AXIS_NUM];
-    msg_trajectory.points.capacity = MOTION_BUFFER_SIZE;
+    // Create subscriber.
+    RCCHECK(rclc_subscription_init(
+        &stepper_cmd_subscriber,
+        &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(stepper_msgs, msg, StepperTrajectory),
+        TOPIC_STEPPER_CMD,
+        &qos
+    ));
+
+    // Allocate memory for StepperTrajectory
+    msg_trajectory.partial_count = 0;
+    msg_trajectory.partial_total = 0;
+    msg_trajectory.transmission_id = 0;
+
+    stepper_msgs__msg__StepperPoint msg_points[MAX_STEPPER_POINTS];
+    msg_trajectory.points.capacity = MAX_STEPPER_POINTS;
     msg_trajectory.points.size = 0;
     msg_trajectory.points.data = msg_points;
-    for (size_t i = 0; i < MOTION_BUFFER_SIZE; ++i) {
+
+    int16_t points_data[MAX_STEPPER_POINTS][MOTION_AXIS_NUM];
+    for (size_t i = 0; i < MAX_STEPPER_POINTS; ++i) {
         msg_points[i].duration_ms = 0;
         msg_points[i].steps.capacity = MOTION_AXIS_NUM;
         msg_points[i].steps.size = 0;
         msg_points[i].steps.data = points_data[i];
     }
 
-    std_msgs__msg__String msg_strings[MOTION_AXIS_NUM];
-    char motor_names_data [MOTION_AXIS_NUM][16];
-    msg_trajectory.motor_names.capacity = MOTION_AXIS_NUM;
-    msg_trajectory.motor_names.size = 0;
-    msg_trajectory.motor_names.data = msg_strings;
-    for (size_t i = 0; i < MOTION_AXIS_NUM; ++i) {
-        msg_trajectory.motor_names.data[i].capacity = 16;
-        msg_trajectory.motor_names.data[i].size = 0;
-        msg_trajectory.motor_names.data[i].data = motor_names_data[i];
-    }
-
     // Add subscribers to executor.
-    RCCHECK(rclc_executor_add_subscription(&executor, &stepper_point_subscriber, &msg_trajectory, &stepper_trajectory_callback, ON_NEW_DATA));
-    
+    RCCHECK(rclc_executor_add_subscription(
+        &executor, &stepper_cmd_subscriber, &msg_trajectory,
+        &stepper_trajectory_callback,
+        //&stepper_trajectory_debug_callback,
+        ON_NEW_DATA));
+
+    // Create publishers.
+    #if 1
+    RCCHECK(rclc_publisher_init(
+        &feedback_publisher,
+        &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(stepper_msgs, msg, StepperFeedback),
+        TOPIC_STEPPER_FB,
+        &qos
+    ));
+
+	// create timer,
+	rcl_timer_t timer;
+	RCCHECK(rclc_timer_init_default(
+		&timer,
+		&support,
+		RCL_MS_TO_NS(200),
+		publish_callback));
+
+	RCCHECK(rclc_executor_add_timer(&executor, &timer));
+    #endif
+
     // Spin forever.
+    ESP_LOGI(TAG,"Spinning micro-ros executor...");
 	while(1){
-		rclc_executor_spin_some(&executor, RCL_MS_TO_NS(100));
-		usleep(100000);
+		rclc_executor_spin_some(&executor, RCL_MS_TO_NS(10));
+		usleep(10000);
 	}
 
     // Free resources.
-    RCCHECK(rcl_subscription_fini(&stepper_point_subscriber, &node));
+    RCCHECK(rcl_subscription_fini(&stepper_cmd_subscriber, &node));
     RCCHECK(rcl_publisher_fini(&feedback_publisher, &node));
     RCCHECK(rcl_node_fini(&node));
 
@@ -242,10 +275,10 @@ void micro_ros_task(void * arg)
 /* ============================ APP MAIN ============================*/
 void app_main() 
 {   
-    esp_log_level_set("*", ESP_LOG_WARN);
+    esp_log_level_set("motion", ESP_LOG_WARN);
+    esp_log_level_set(TAG, ESP_LOG_INFO);
     network_init();
     main_event_group = xEventGroupCreate();
+    xTaskCreate(micro_ros_task, "uros_task", 16383, NULL, 5, NULL);
     xTaskCreate(motion_task, "motion_task", 4096, NULL, 5, NULL);
-    xTaskCreate(micro_ros_task, "uros_task", 16384, NULL, 5, NULL);
-    xTaskCreate(publisher_task, "publisher_task", 4096, NULL, 5, NULL);
 }

@@ -3,7 +3,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define MOTION_BUFFER_SIZE 256
 #define MOTION_AXIS_NUM 6
 
 typedef struct {
@@ -13,7 +12,7 @@ typedef struct {
 } motion_instruction_t;
 
 typedef struct {
-    int32_t steps_executed;
+    int32_t steps_executed[MOTION_AXIS_NUM];
     uint8_t current_point;
     uint8_t total_points;
 } motion_execution_state_t;
@@ -36,6 +35,6 @@ void motion_axis_stop(motion_axis_handle_t axis_handle);
 
 void motion_await_done();
 
-void motion_get_feedback(int32_t *feedback);
+int motion_get_state(motion_execution_state_t *state);
 
 #endif // MOTION_H
