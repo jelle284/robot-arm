@@ -6,12 +6,6 @@
 #define MOTION_AXIS_NUM 6
 
 typedef struct {
-    int16_t steps;
-    uint16_t pulse_us;
-    uint16_t level;
-} motion_instruction_t;
-
-typedef struct {
     int32_t steps_executed[MOTION_AXIS_NUM];
     uint8_t current_point;
     uint8_t total_points;
@@ -19,19 +13,13 @@ typedef struct {
 
 typedef struct motion_axis_t* motion_axis_handle_t;
 
-void motion_system_init();
+void motion_system_init(const int* pul_pins, const int* dir_pins);
 
-motion_axis_handle_t motion_axis_create(int pul_pin, int dir_pin);
+void motion_load_trajectory(int16_t *steps, uint32_t duration_ms);
 
-void motion_axis_load_trajectory(motion_axis_handle_t axis_handle, motion_instruction_t cmd);
+void motion_execute();
 
-void motion_axis_reset(motion_axis_handle_t axis_handle);
-
-void motion_axis_execute(motion_axis_handle_t axis_handle);
-
-void motion_execute_all();
-
-void motion_axis_stop(motion_axis_handle_t axis_handle);
+void motion_stop();
 
 void motion_await_done();
 

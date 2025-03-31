@@ -29,7 +29,7 @@ class MinimalPublisher(Node):
 
     def create_trajectory(self):
         points = []
-        seq = [200]*128
+        seq = [100]*20+[-200]*10
         for s in seq:
             point = StepperPoint()
             point.steps = [0] * AXIS_NUM

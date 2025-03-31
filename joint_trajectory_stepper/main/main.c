@@ -29,9 +29,6 @@
 // ESP Log tag
 static const char* TAG = "main";
 
-// Motion axis setup
-motion_axis_handle_t motion_axis[MOTION_AXIS_NUM];
-
 // Topics
 #define TOPIC_STEPPER_CMD "/stepper_cmd"
 #define TOPIC_STEPPER_FB "/stepper_fb"
@@ -50,52 +47,23 @@ stepper_msgs__msg__StepperTrajectory msg_trajectory;
 EventGroupHandle_t main_event_group;
 
 /* ============================ SUBSCRIBER PROCESSING ============================*/
-void process_axis(const stepper_msgs__msg__StepperPoint* point, size_t axis_num) {
-    if (axis_num > point->steps.size) {
-        ESP_LOGE(TAG,"Invalid axis_num in process_axis!");
-        return;
-    }
-    motion_instruction_t cmd;
-    cmd.steps = point->steps.data[axis_num];
-    // If we have zero steps we just make 1 ms zero level pulses
-    if (cmd.steps == 0) {
-        cmd.steps = point->duration_ms;
-        cmd.pulse_us = 1000;
-        cmd.level = 0;
-    } else {
-        // first we check for potential overflow in pulse micros
-        // if we have overflow we shorten the duration and add an extra delay instruction
-        // to make up the time
-        uint32_t temp_us = (1000*point->duration_ms) / abs(cmd.steps);
-        if (temp_us > UINT16_MAX) { 
-            uint16_t max_duration_ms = abs(cmd.steps)*(UINT16_MAX/1000);
-            uint16_t delay_ms = point->duration_ms - max_duration_ms;
-            motion_instruction_t delay_cmd = {
-                .level = 0,
-                .steps = delay_ms,
-                .pulse_us = 1000
-            };
-            motion_axis_load_trajectory(motion_axis[axis_num], delay_cmd);
-            temp_us = UINT16_MAX;
-            ESP_LOGW(TAG, "Overflow in pulse width. Inserting delay of %hu", delay_ms);
-        } 
-        cmd.pulse_us = temp_us;
-        cmd.level = 1;
-    }
-    motion_axis_load_trajectory(motion_axis[axis_num], cmd);
-}
 
 void stepper_trajectory_callback(const void* msg_in)
 {
     const stepper_msgs__msg__StepperTrajectory* msg = (const stepper_msgs__msg__StepperTrajectory*)msg_in;
-
+    bool err = false;
     for (size_t i = 0; i < msg->points.size; ++i) {
         stepper_msgs__msg__StepperPoint point = msg->points.data[i];
-        for (size_t n = 0; n < MOTION_AXIS_NUM; ++n) {
-            process_axis(&point, n);
+        if (point.steps.size != MOTION_AXIS_NUM) {
+            err = true;
+            break;
         }
+        motion_load_trajectory(point.steps.data, point.duration_ms);
     }
-    
+    if(err) {
+        ESP_LOGE(TAG, "Point size not matching MOTION_AXIS_NUM");
+        return;
+    }
     // Notify execution start
     if (msg->partial_count == msg->partial_total) {
         msg_feedback.transmission_id = msg->transmission_id;
@@ -120,29 +88,18 @@ void motion_task(void* arg)
 {
     ESP_LOGI(TAG, "Configuring motion axis");
 
-    motion_system_init();
-    
     const int pulse_pins[] = {26, 14, 23, 33, 18, 21};
     const int dir_pins[] = {27, 13, 4, 25, 19, 22};
-    for (int i = 0; i < MOTION_AXIS_NUM; ++i) {
-        motion_axis[i] = motion_axis_create(pulse_pins[i], dir_pins[i]);
-        motion_axis_reset(motion_axis[i]);
-    }
-    
+    motion_system_init(pulse_pins, dir_pins);
+
     ESP_LOGI(TAG, "Motion setup succesfully. Starting transmission loop.");
     for (;;) {
         // Wait for the event to start execution
         xEventGroupWaitBits(main_event_group, BIT1, pdTRUE, pdFALSE, portMAX_DELAY);
         ESP_LOGI(TAG, "Transmission event occured.");
-
-        for (int i = 0; i < MOTION_AXIS_NUM; ++i) {
-            motion_axis_execute(motion_axis[i]);
-        }
+        motion_execute();
         ESP_LOGI(TAG, "Execution transmitted.");
         motion_await_done();
-        for (int i = 0; i < MOTION_AXIS_NUM; ++i) {
-            motion_axis_reset(motion_axis[i]);
-        }
     }
 }
 
@@ -166,27 +123,31 @@ void micro_ros_task(void * arg)
 {
     ESP_LOGI(TAG,"Micro-ros task entry.");
     rcl_allocator_t allocator = rcl_get_default_allocator();
-    rclc_support_t support;
 
     // Create init_options.
     rcl_init_options_t init_options = rcl_get_zero_initialized_init_options();
     RCCHECK(rcl_init_options_init(&init_options, allocator));
     RCCHECK(rcl_init_options_set_domain_id(&init_options, 1));
 
-    // Static Agent IP and port can be used instead of autodiscovery.
+    // Setup rmw options and ping agent
     rmw_init_options_t* rmw_options = rcl_init_options_get_rmw_init_options(&init_options);
     const char ip[] = "192.168.0.10";
     const char port[] = "8888";
     RCCHECK(rmw_uros_options_set_udp_address(ip, port, rmw_options));
+    while (RMW_RET_OK != rmw_uros_ping_agent_options(1000, 1, rmw_options)) {
+        ESP_LOGW(TAG, "Could not connect to agent. Retrying...");
+    }
 
     // Setup support structure.
+    rclc_support_t support;
     RCCHECK(rclc_support_init_with_options(&support, 0, NULL, &init_options, &allocator));
-
+    
     // Create node.
     char node_name[64];
     snprintf(node_name, sizeof(node_name), "uros_esp32_robot_controller_%d", rand());
     rcl_node_t node = rcl_get_zero_initialized_node();
-    RCCHECK(rclc_node_init_default(&node, node_name, "", &support));
+    rcl_node_options_t node_ops = rcl_node_get_default_options();
+    RCCHECK(rclc_node_init_with_options(&node, node_name, "", &support, &node_ops));
 
     // Create executor.
     rclc_executor_t executor = rclc_executor_get_zero_initialized_executor();
@@ -246,13 +207,14 @@ void micro_ros_task(void * arg)
         &qos
     ));
 
-	// create timer,
+	// create timer
 	rcl_timer_t timer;
-	RCCHECK(rclc_timer_init_default(
+	RCCHECK(rclc_timer_init_default2(
 		&timer,
 		&support,
-		RCL_MS_TO_NS(200),
-		publish_callback));
+		RCL_MS_TO_NS(500),
+		publish_callback,
+        true));
 
 	RCCHECK(rclc_executor_add_timer(&executor, &timer));
     #endif
@@ -260,7 +222,7 @@ void micro_ros_task(void * arg)
     // Spin forever.
     ESP_LOGI(TAG,"Spinning micro-ros executor...");
 	while(1){
-		rclc_executor_spin_some(&executor, RCL_MS_TO_NS(10));
+		rclc_executor_spin_some(&executor, RCL_MS_TO_NS(100));
 		usleep(10000);
 	}
 
@@ -275,10 +237,10 @@ void micro_ros_task(void * arg)
 /* ============================ APP MAIN ============================*/
 void app_main() 
 {   
-    esp_log_level_set("motion", ESP_LOG_WARN);
+    esp_log_level_set("motion", ESP_LOG_INFO);
     esp_log_level_set(TAG, ESP_LOG_INFO);
     network_init();
     main_event_group = xEventGroupCreate();
-    xTaskCreate(micro_ros_task, "uros_task", 16383, NULL, 5, NULL);
-    xTaskCreate(motion_task, "motion_task", 4096, NULL, 5, NULL);
+    xTaskCreate(micro_ros_task, "uros_task", 8192, NULL, 5, NULL);
+    xTaskCreate(motion_task, "motion_task", 4096, NULL, 4, NULL);
 }
