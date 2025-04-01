@@ -96,10 +96,9 @@ void motion_task(void* arg)
     for (;;) {
         // Wait for the event to start execution
         xEventGroupWaitBits(main_event_group, BIT1, pdTRUE, pdFALSE, portMAX_DELAY);
-        ESP_LOGI(TAG, "Transmission event occured.");
+        ESP_LOGI(TAG, "Executing motion.");
         motion_execute();
-        ESP_LOGI(TAG, "Execution transmitted.");
-        motion_await_done();
+        ESP_LOGI(TAG, "Execution done.");
     }
 }
 
@@ -107,13 +106,13 @@ void publish_callback(rcl_timer_t * timer, int64_t last_call_time)
 {
 	(void) last_call_time;
 	if (timer != NULL) {
-        motion_execution_state_t state;
-        if(motion_get_state(&state) > 0) {
-            msg_feedback.steps_executed.data = state.steps_executed;
+        motion_feedback_t fb;
+        if(motion_get_feedback(&fb) > 0) {
+            msg_feedback.steps_executed.data = fb.steps_executed;
             msg_feedback.steps_executed.capacity = MOTION_AXIS_NUM;
             msg_feedback.steps_executed.size = MOTION_AXIS_NUM;
-            msg_feedback.current_point = state.current_point;
-            msg_feedback.total_points = state.total_points;
+            msg_feedback.current_point = fb.current_point;
+            msg_feedback.total_points = fb.total_points;
             RCCHECK(rcl_publish(&feedback_publisher, &msg_feedback, NULL));
         }
 	}

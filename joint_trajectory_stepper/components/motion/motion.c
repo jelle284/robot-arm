@@ -1,19 +1,13 @@
 #include "motion.h"
 #include "driver/gpio.h"
+#include "driver/gptimer.h"
 #include "driver/rmt_encoder.h"
 #include "driver/rmt_tx.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "esp_log.h"
 
-#ifdef ESP_TIMER
-#include "esp_timer.h"
-#else
-#include "driver/gptimer.h"
-#endif
-
-#define ALL_TX_DONE_BITS (BIT0 | BIT1 | BIT2 | BIT3 | BIT4 | BIT5)
-#define FB_RDY_BIT BIT15
+#define FB_RDY_BIT BIT0
 #define MOTION_BUFFER_SIZE 256
 
 /* ===================================================== */
@@ -32,28 +26,27 @@ typedef struct {
     uint16_t delay_count;
 } stepper_encoder_ctx_t;
 
-struct motion_axis_t {
+typedef struct {
     size_t              index;
     gpio_num_t          pul_pin;
     gpio_num_t          dir_pin;
     rmt_encoder_handle_t encoder;
     stepper_encoder_ctx_t encoder_ctx;
     motion_instruction_t data[MOTION_BUFFER_SIZE];
-};
+} motion_axis_t;
 
-motion_axis_handle_t    axes[MOTION_AXIS_NUM];
-rmt_channel_handle_t    rmt_channels[MOTION_AXIS_NUM];
+/* ===================================================== */
+/*                     PRIVATE VARS                      */
+/* ===================================================== */
+motion_axis_t           axes[MOTION_AXIS_NUM];
+rmt_channel_handle_t    tx_channels[MOTION_AXIS_NUM];
+motion_state_t          motion_state = MS_UNINITIALIZED;
 
 size_t                  load_index;
-size_t                  execution_index;
-int64_t                 tx_time_us;
-int64_t                 execution_time_us[MOTION_BUFFER_SIZE];
-int32_t                 executed_steps[MOTION_AXIS_NUM];
-#ifdef ESP_TIMER
-esp_timer_handle_t      execution_control_timer;
-#else
+size_t                  exec_index;
+uint64_t                exec_time_us[MOTION_BUFFER_SIZE];
+int32_t                 exec_steps[MOTION_AXIS_NUM];
 gptimer_handle_t        exec_timer;
-#endif
 
 EventGroupHandle_t      motion_event_group;
 
@@ -111,100 +104,67 @@ size_t stepper_encoder_cb(const void *data, size_t data_size,
     return i;
 }
 
-bool axis_tx_done(rmt_channel_handle_t tx_chan, const rmt_tx_done_event_data_t *edata, void* user_ctx) {
-    unsigned int* idx = (unsigned int*)user_ctx;
-    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-    xEventGroupSetBitsFromISR(motion_event_group, BIT(*idx), &xHigherPriorityTaskWoken);
-    if (xHigherPriorityTaskWoken == pdTRUE) {
-        portYIELD_FROM_ISR();
-    }
-    return false;
-}
-void axis_reset(motion_axis_handle_t axis_handle) {
-    stepper_encoder_ctx_t *ctx = &axis_handle->encoder_ctx;
-
-    ESP_ERROR_CHECK(rmt_encoder_reset(axis_handle->encoder));
-    gpio_set_level(axis_handle->dir_pin, 0);
-
-    ctx->data_position = 0;
-    ctx->step_count = 0;
-}
-
-#ifdef ESP_TIMER
-
-void IRAM_ATTR execution_control_callback(void *arg) {
-    execution_index++;
-    // Update direction pins for next instruction
-    motion_instruction_t instr;
-    for (int i = 0; i < MOTION_AXIS_NUM; ++i) {
-        instr = axes[i]->data[execution_index];
-        gpio_set_level(axes[i]->dir_pin, (instr.steps < 0) ? 1 : 0);
-    }
-
-    // Submit feedback
-    BaseType_t need_yield = pdFALSE;
-    xEventGroupSetBitsFromISR(motion_event_group, FB_RDY_BIT, &need_yield);
-    if (need_yield == pdTRUE) { esp_timer_isr_dispatch_need_yield(); }
-
-    // Set next timer
-    if (execution_index < load_index) {
-        int64_t elapsed_since_tx = esp_timer_get_time() - tx_time_us;
-        int64_t interval_us = execution_time_us[execution_index] - elapsed_since_tx;
-        esp_timer_start_once(execution_control_timer, interval_us);
-    }
-}
-#else
 static bool IRAM_ATTR exec_timer_cb(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_data)
 {
     BaseType_t high_task_awoken = pdFALSE;
     
+    // Submit feedback
+    for (int i = 0; i < MOTION_AXIS_NUM; ++i) {
+        exec_steps[i] += axes[i].data[exec_index].steps;
+    }
+    xEventGroupSetBitsFromISR(motion_event_group, FB_RDY_BIT, &high_task_awoken);
+
     // Update direction pins for next instruction
-    execution_index++;
+    exec_index++;
     motion_instruction_t instr;
     for (int i = 0; i < MOTION_AXIS_NUM; ++i) {
-        instr = axes[i]->data[execution_index];
-        gpio_set_level(axes[i]->dir_pin, (instr.steps < 0) ? 1 : 0);
+        instr = axes[i].data[exec_index];
+        gpio_set_level(axes[i].dir_pin, (instr.steps < 0) ? 1 : 0);
     }
-
-    // Submit feedback
-    xEventGroupSetBitsFromISR(motion_event_group, FB_RDY_BIT, &high_task_awoken);
-    // TODO: step counting
     
     // reconfigure alarm value
-    if (execution_index < load_index) {
+    if (exec_index < load_index) {
         gptimer_alarm_config_t alarm_config = {
-            .alarm_count = execution_time_us[execution_index],
+            .alarm_count = exec_time_us[exec_index],
         };
         gptimer_set_alarm_action(timer, &alarm_config);
     } else {
-        // TX is finished. clean up
+        // TX is finished.
         gptimer_stop(timer);
         gptimer_set_raw_count(exec_timer, 0);
-        load_index = 0; // TODO: this causes last feedback to read 0 total points
-        for (int i = 0; i < MOTION_AXIS_NUM; ++i) {
-            axis_reset(axes[i]);
-        }
     }
     // return whether we need to yield at the end of ISR
     return (high_task_awoken == pdTRUE);
 }
-#endif
-
 
 /* ===================================================== */
 /*                  PUBLIC FUNCTIONS                     */
 /* ===================================================== */
 
 void motion_system_init(const int* pul_pins, const int* dir_pins) {
+    // Create event group
     motion_event_group = xEventGroupCreate();
-    xEventGroupClearBits(motion_event_group, ALL_TX_DONE_BITS | FB_RDY_BIT);
+    xEventGroupClearBits(motion_event_group, FB_RDY_BIT);
 
+    // Create GP timer for execution control
+    gptimer_config_t timer_config = {
+        .clk_src = GPTIMER_CLK_SRC_DEFAULT,
+        .direction = GPTIMER_COUNT_UP,
+        .resolution_hz = 1000000, // 1 MHz, 1 tick = 1 us
+    };
+    ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &exec_timer));
+    gptimer_event_callbacks_t cbs = {
+        .on_alarm = exec_timer_cb,
+    };
+    ESP_ERROR_CHECK( gptimer_register_event_callbacks(exec_timer, &cbs, NULL) );
+    ESP_ERROR_CHECK( gptimer_enable(exec_timer) );
+
+    // Initialize Axes
     for (size_t i = 0; i < MOTION_AXIS_NUM; ++i){
-        // Init axis handle
-        motion_axis_handle_t axis_handle = (motion_axis_handle_t)malloc(sizeof(struct motion_axis_t));
-        axis_handle->index = i;
-        axis_handle->pul_pin = pul_pins[i];
-        axis_handle->dir_pin = dir_pins[i];
+        
+        axes[i].index = i;
+        axes[i].pul_pin = pul_pins[i];
+        axes[i].dir_pin = dir_pins[i];
 
         // Init direction pin
         gpio_config_t io_conf = {};
@@ -224,60 +184,37 @@ void motion_system_init(const int* pul_pins, const int* dir_pins) {
             .resolution_hz = 1 * 1000 * 1000,
             .trans_queue_depth = 1,
         };
-        ESP_ERROR_CHECK(rmt_new_tx_channel(&tx_chan_config, &rmt_channels[i]));
-
-        rmt_tx_event_callbacks_t cbs = {
-            .on_trans_done = axis_tx_done
-        };
-        ESP_ERROR_CHECK(rmt_tx_register_event_callbacks(rmt_channels[i], &cbs, (void*)&axis_handle->index));
+        ESP_ERROR_CHECK(rmt_new_tx_channel(&tx_chan_config, &tx_channels[i]));
 
         rmt_simple_encoder_config_t encoder_config = {
-            .arg = (void*)&axis_handle->encoder_ctx,
+            .arg = (void*)&axes[i].encoder_ctx,
             .min_chunk_size = 64,
             .callback = stepper_encoder_cb
         };
-        ESP_ERROR_CHECK(rmt_new_simple_encoder(&encoder_config, &axis_handle->encoder));
+        ESP_ERROR_CHECK(rmt_new_simple_encoder(&encoder_config, &axes[i].encoder));
 
-        ESP_ERROR_CHECK(rmt_enable(rmt_channels[i]));
-        axis_reset(axis_handle);
-        axes[i] = axis_handle;
+        ESP_ERROR_CHECK(rmt_enable(tx_channels[i]));
         ESP_LOGI("motion", "New axis created on index %d", i);
     }
-
-    // init loading
-    load_index = 0;
-
-    // init execution control
-    execution_index = 0;
-    for (size_t i = 0; i < MOTION_AXIS_NUM; ++i) {
-        executed_steps[i] = 0;
-    }
-    #ifdef ESP_TIMER
-    // create esp timer for execution control
-    const esp_timer_create_args_t execution_control_timer_args = {
-        .callback = &execution_control_callback,
-        .dispatch_method = ESP_TIMER_ISR,
-        .name = "execution control"
-    };
-
-    ESP_ERROR_CHECK( esp_timer_create(&execution_control_timer_args, &execution_control_timer) );
-    #else
-    // create GP timer for execution control
-    gptimer_config_t timer_config = {
-        .clk_src = GPTIMER_CLK_SRC_DEFAULT,
-        .direction = GPTIMER_COUNT_UP,
-        .resolution_hz = 1000000, // 1 MHz, 1 tick = 1 us
-    };
-    ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &exec_timer));
-    gptimer_event_callbacks_t cbs = {
-        .on_alarm = exec_timer_cb,
-    };
-    ESP_ERROR_CHECK( gptimer_register_event_callbacks(exec_timer, &cbs, NULL) );
-    ESP_ERROR_CHECK( gptimer_enable(exec_timer) );
-    #endif
+    motion_state = MS_IDLE;
 }   
 
 void motion_load_trajectory(int16_t* steps, uint32_t duration_ms) {
+    switch(motion_state) {
+        case MS_UNINITIALIZED:
+            ESP_LOGE("motion", "Motion is uninitalized!");
+            return;
+        case MS_EXECUTING:
+            ESP_LOGE("motion", "Can not load points while a trajectory is executing.");
+            return;
+        case MS_IDLE:
+        case MS_COMPLETE:
+            load_index = 0;
+            motion_state = MS_LOADING;
+            break;
+        default:
+            break;
+    }
     if (load_index >= MOTION_BUFFER_SIZE) {
         ESP_LOGE("motion", "Data buffer is full. Cannot load trajectory.");
         return;
@@ -303,81 +240,80 @@ void motion_load_trajectory(int16_t* steps, uint32_t duration_ms) {
             }
             cmd.pulse_us = temp_us;
         }
-        axes[i]->data[load_index] = cmd;
+        axes[i].data[load_index] = cmd;
     }
     uint64_t next_ts = duration_ms*1000;
     if (load_index > 0) {
-        next_ts += execution_time_us[load_index-1];
+        next_ts += exec_time_us[load_index-1];
     }
-    execution_time_us[load_index] = next_ts;
+    exec_time_us[load_index] = next_ts;
     load_index++;
 }
 
 void motion_execute() {
     // check if we have points to execute
-        if (load_index == 0) { 
-            ESP_LOGE("motion", "No points in loaded. Failed to execute.");
-            return;
-        }
-    // set direction pins
+    if (load_index == 0) { 
+        ESP_LOGE("motion", "No points in loaded. Failed to execute.");
+        return;
+    }
+
+    // set motion state
+    motion_state = MS_EXECUTING;
+
+    // Prepare for execution
     for (size_t i = 0; i < MOTION_AXIS_NUM; ++i) {
-        gpio_set_level(axes[i]->dir_pin, (axes[i]->data[0].steps < 0) ? 1 : 0);
-    }   
+        axes[i].encoder_ctx.data_position = 0;
+        axes[i].encoder_ctx.step_count = 0;
+        axes[i].encoder_ctx.delay_count = 0;
+        ESP_ERROR_CHECK( rmt_encoder_reset(axes[i].encoder) );
+        gpio_set_level(axes[i].dir_pin, (axes[i].data[0].steps < 0) ? 1 : 0);
+        exec_steps[i] = 0;
+    }
+    exec_index = 0;
+    
+    // Setup Timer
+    gptimer_alarm_config_t alarm_config = {
+        .alarm_count = exec_time_us[0],
+    };
+    ESP_ERROR_CHECK( gptimer_set_alarm_action(exec_timer, &alarm_config) );
+
+    // Start timer
+    ESP_ERROR_CHECK( gptimer_start(exec_timer) );
+
     // start transmitting
     rmt_transmit_config_t tx_config = {
         .loop_count = 0
     };
     for (size_t i = 0; i < MOTION_AXIS_NUM; ++i) {
-        ESP_ERROR_CHECK(rmt_transmit(rmt_channels[i], axes[i]->encoder, axes[i]->data, load_index, &tx_config));
+        ESP_ERROR_CHECK(rmt_transmit(tx_channels[i], axes[i].encoder, axes[i].data, load_index, &tx_config));
     }
-    execution_index = 0;
-    #ifdef ESP_TIMER
-    // start execution control timer
-    tx_time_us = esp_timer_get_time();
-    ESP_ERROR_CHECK( esp_timer_start_once(execution_control_timer, execution_time_us[0]) );
-    ESP_LOGI("motion", "Execution started.");
-    #else
-    gptimer_alarm_config_t alarm_config = {
-        .alarm_count = execution_time_us[0],
-    };
-    ESP_ERROR_CHECK( gptimer_set_alarm_action(exec_timer, &alarm_config) );
-    ESP_ERROR_CHECK( gptimer_start(exec_timer) );
-    #endif
 
+    // Wait for execution to finish
+    for (size_t i = 0; i < MOTION_AXIS_NUM; ++i) {
+        rmt_tx_wait_all_done(tx_channels[i], -1);
+    }
+    motion_state = MS_COMPLETE;
 }
 
 void motion_stop()
 {
     for (size_t i = 0; i < MOTION_AXIS_NUM; ++i) {
-        ESP_ERROR_CHECK( rmt_disable(rmt_channels[i]) );
+        ESP_ERROR_CHECK( rmt_disable(tx_channels[i]) );
     }
 
     for (size_t i = 0; i < MOTION_AXIS_NUM; ++i) {
-        ESP_ERROR_CHECK( rmt_enable(rmt_channels[i]) );
+        ESP_ERROR_CHECK( rmt_enable(tx_channels[i]) );
     }
 }
 
-void motion_await_done()
-{
-    EventBits_t bits = xEventGroupWaitBits(motion_event_group, ALL_TX_DONE_BITS, pdFALSE, pdTRUE, portMAX_DELAY);
-    if (bits == ALL_TX_DONE_BITS) {
-        ESP_LOGI("motion", "All transmissions complete");
-        for (size_t i = 0; i < MOTION_AXIS_NUM; ++i) {
-            
-        }
-        xEventGroupClearBits(motion_event_group, ALL_TX_DONE_BITS);
-    }
-}
-
-int motion_get_state(motion_execution_state_t *state) {
-    // TODO: use xQueueOverwrite to pass execution state
+int motion_get_feedback(motion_feedback_t *state) {
     const unsigned int wait_ms = 100;
     EventBits_t bits = xEventGroupWaitBits(motion_event_group, FB_RDY_BIT, pdFALSE, pdTRUE, pdMS_TO_TICKS(wait_ms));
     if (bits & FB_RDY_BIT) {
         for (int i = 0; i < MOTION_AXIS_NUM; ++i) {
-            state->steps_executed[i] = executed_steps[i];
+            state->steps_executed[i] = exec_steps[i];
         }
-        state->current_point = execution_index;
+        state->current_point = exec_index;
         state->total_points = load_index;
         xEventGroupClearBits(motion_event_group, FB_RDY_BIT);
         return 1;
