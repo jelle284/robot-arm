@@ -11,19 +11,39 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPo
 
 import stepper_joint_conversion as cvt
 
+from threading import Event
+import time
 import json
 import os
 from array import array
-import time
 
-QOS_BEST_EFFORT = QoSProfile(
-    reliability=ReliabilityPolicy.BEST_EFFORT,
+QOS_PROFILE = QoSProfile(
+    reliability=ReliabilityPolicy.RELIABLE,
     durability=DurabilityPolicy.VOLATILE,
     history=HistoryPolicy.KEEP_LAST,
     depth=10
 )
 
-MAX_POINTS=32
+MAX_PARTIAL_SIZE    = 32
+MAX_TOTAL_SIZE      = 256
+
+def process_points(points: list, tx_id):
+    msg_list = []
+    N = len(points)
+    num_tx = (N // MAX_PARTIAL_SIZE)
+    if N % MAX_PARTIAL_SIZE > 0:
+        num_tx += 1
+    first = 0
+    for n in range(num_tx):
+        last = min(first+MAX_PARTIAL_SIZE, N)
+        msg = StepperTrajectory()
+        msg.points = points[first:last]
+        msg.transmission_id = tx_id
+        msg.partial_total=num_tx
+        msg.partial_count=n+1
+        msg_list.append(msg)
+        first = last
+    return msg_list
 
 class StepperTrajectoryProcessor(Node):
     def __init__(self):
@@ -41,12 +61,17 @@ class StepperTrajectoryProcessor(Node):
         # Count transmissions
         self.transmission_num = 0
 
+        # Create an event for when feedback is recieved
+        self.stepper_fb_event = Event()
+        self.stepper_fb_msg = StepperFeedback()
+
         # Load stored joint states
         self.joint_state_file = "joint_states.json"
         joint_states = self.load_joint_states()
         if joint_states == None:
-            joint_states = { "positions": [0.0] * motor_conf["num_joints"] }
-        self.current_joint_states = joint_states
+            joint_states = [0.0] * motor_conf["num_joints"]
+        self.joint_states_now = array('d', joint_states["positions"])
+        self.joint_states_prev = self.joint_states_now
 
         # Initialize the action server
         self.action_server = ActionServer(
@@ -60,8 +85,7 @@ class StepperTrajectoryProcessor(Node):
         self.stepper_cmd_publisher = self.create_publisher(
             StepperTrajectory,
             '/stepper_cmd',
-            #QOS_BEST_EFFORT
-            10
+            QOS_PROFILE
         )
 
         # Publisher for joint states
@@ -72,15 +96,14 @@ class StepperTrajectoryProcessor(Node):
         )
         
         # Periodic publishing of joint states
-        self.timer = self.create_timer(1.0, self.publish_joint_states)  # Publish every 1 second
+        self.joint_state_timer = self.create_timer(1.0, self.publish_joint_states)  # Publish every 1 second
 
         # Subscriber for stepper feedback
         self.stepper_fb_subscriber = self.create_subscription(
             StepperFeedback,
             '/stepper_fb',
             self.stepper_fb_callback,
-            #QOS_BEST_EFFORT
-            10
+            QOS_PROFILE
             )
         
         self.get_logger().info(f"Succesfully initialized stepper trajectory processor.")
@@ -97,32 +120,32 @@ class StepperTrajectoryProcessor(Node):
     
     def save_joint_states(self):
         with open(self.joint_state_file, "w") as file:
-            json.dump(self.current_joint_states, file)
-        self.get_logger().info(f"Saved joint states: {self.current_joint_states}")
+            json.dump({"positions": self.joint_states_now.tolist()}, file)
+        self.get_logger().info(f"Saved joint states: {self.joint_states_now}")
 
     def publish_joint_states(self):
         joint_state_msg = JointState()
         joint_state_msg.header.stamp = self.get_clock().now().to_msg()
-        joint_state_msg.name = [f"j{i}" for i in range(len(self.current_joint_states["positions"]))]
-        joint_state_msg.position = self.current_joint_states["positions"]
+        joint_state_msg.name = [f"j{i}" for i in range(len(self.joint_states_now))]
+        joint_state_msg.position = self.joint_states_now
         self.joint_state_publisher.publish(joint_state_msg)
-
+    
     def stepper_fb_callback(self, msg: StepperFeedback):
-        print(msg)
+        self.stepper_fb_msg = msg
+        self.stepper_fb_event.set()
 
     async def execute_callback(self, goal_handle: ServerGoalHandle):
         result = FollowJointTrajectory.Result()
         trajectory: JointTrajectory = goal_handle.request.trajectory
         self.get_logger().info(f"Goal handle recieved. Trajectory has {len(trajectory.points)} points")
-        # initialize stepper trajectory
-        stepper_cmd = StepperTrajectory()
-        stepper_cmd.transmission_id = self.transmission_num
-        stepper_cmd.motor_names = list(self.motor_conf["motors"].keys())
-        stepper_points = []
-
+        
+        if len(trajectory.points) >= MAX_TOTAL_SIZE:
+            self.get_logger().error(f"Too many points in trajectory: {len(trajectory.points)}.")
+            return result
+        
         # Process trajectory points
         prev_point = None
-
+        stepper_points = []
         for point in trajectory.points:
             point: JointTrajectoryPoint
             if not prev_point:
@@ -143,15 +166,40 @@ class StepperTrajectoryProcessor(Node):
             prev_point = point
 
         # Publish the trajectory
-        stepper_cmd.points = stepper_points
-        self.stepper_cmd_publisher.publish(stepper_cmd)
-        self.transmission_num += 1
+        self.get_logger().info(f"Transmission {self.transmission_num} starting.")
+        msgs = process_points(stepper_points, self.transmission_num)
+        for msg in msgs:
+            self.stepper_cmd_publisher.publish(msg)
+            time.sleep(0.020)
 
         # Monitor execution and submit feedback
-        #TODO
+        while 1:
+            self.stepper_fb_event.wait()
+            self.stepper_fb_event.clear()
+            msg = self.stepper_fb_msg
+            joints = cvt.convert_steps_to_joint(msg.steps_executed, self.tf)
+            self.joint_states_now = array('d', [i+j for i,j in zip(self.joint_states_prev, joints)])
+            try:
+                desired_point: JointTrajectoryPoint = trajectory.points[msg.current_point]
+                action_feedback = FollowJointTrajectory.Feedback()
+                action_feedback.actual.positions = self.joint_states_now
+                action_feedback.desired = desired_point
+                action_feedback.error.positions = array(
+                    'd',
+                    [i-j for i,j in zip(self.joint_states_now, desired_point.positions)])
+                goal_handle.publish_feedback(action_feedback)
+            except IndexError:
+                self.get_logger().error(f"Index error in trajectory at point {msg.current_point}")
+            if msg.current_point == msg.total_points:
+                self.joint_states_prev = self.joint_states_now
+                self.save_joint_states()
+                self.tx_done = True
+                self.get_logger().info(f"Transmission {msg.transmission_id} done.")
+                break
 
         # Mark the goal as succeeded
         goal_handle.succeed()
+        self.transmission_num += 1
         self.get_logger().info("Goal execution complete")
         return result
 

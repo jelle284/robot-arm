@@ -28,14 +28,21 @@ class MinimalPublisher(Node):
         self.timer = self.create_timer(timer_period, self.timer_callback)
 
     def create_trajectory(self):
+        steps = [[
+            0,
+            -200,
+            0,
+            0,
+            0,
+            0,
+        ]]*1
         points = []
-        seq = [100]*45+[-200]*6
-        for s in seq:
+        for step in steps:
             point = StepperPoint()
-            point.steps = [0] * AXIS_NUM
-            point.steps[0] = s
-            point.duration_ms = 100
+            point.steps = step
+            point.duration_ms = 1000
             points.append(point)
+
         self.pub_list = self.process_points(points)
 
     def timer_callback(self):

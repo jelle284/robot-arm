@@ -130,9 +130,7 @@ void micro_ros_task(void * arg)
 
     // Setup rmw options and ping agent
     rmw_init_options_t* rmw_options = rcl_init_options_get_rmw_init_options(&init_options);
-    const char ip[] = "192.168.0.10";
-    const char port[] = "8888";
-    RCCHECK(rmw_uros_options_set_udp_address(ip, port, rmw_options));
+    RCCHECK(rmw_uros_options_set_udp_address(CONFIG_MICRO_ROS_AGENT_IP, CONFIG_MICRO_ROS_AGENT_PORT, rmw_options));
     while (RMW_RET_OK != rmw_uros_ping_agent_options(1000, 1, rmw_options)) {
         ESP_LOGW(TAG, "Could not connect to agent. Retrying...");
     }
@@ -151,7 +149,7 @@ void micro_ros_task(void * arg)
     // Create executor.
     rclc_executor_t executor = rclc_executor_get_zero_initialized_executor();
     RCCHECK(rclc_executor_init(&executor, &support.context, 2, &allocator));
-    unsigned int rcl_wait_timeout = 2000;   // in ms
+    unsigned int rcl_wait_timeout = 1000;   // in ms
     RCCHECK(rclc_executor_set_timeout(&executor, RCL_MS_TO_NS(rcl_wait_timeout)));
 
     // Set Quality of service
@@ -211,7 +209,7 @@ void micro_ros_task(void * arg)
 	RCCHECK(rclc_timer_init_default2(
 		&timer,
 		&support,
-		RCL_MS_TO_NS(500),
+		RCL_MS_TO_NS(200),
 		publish_callback,
         true));
 
@@ -221,8 +219,8 @@ void micro_ros_task(void * arg)
     // Spin forever.
     ESP_LOGI(TAG,"Spinning micro-ros executor...");
 	while(1){
-		rclc_executor_spin_some(&executor, RCL_MS_TO_NS(100));
-		usleep(10000);
+		rclc_executor_spin_some(&executor, RCL_MS_TO_NS(20));
+		usleep(80000);
 	}
 
     // Free resources.
@@ -236,8 +234,7 @@ void micro_ros_task(void * arg)
 /* ============================ APP MAIN ============================*/
 void app_main() 
 {   
-    esp_log_level_set("motion", ESP_LOG_INFO);
-    esp_log_level_set(TAG, ESP_LOG_INFO);
+    esp_log_level_set("*", ESP_LOG_NONE);
     network_init();
     main_event_group = xEventGroupCreate();
     xTaskCreate(micro_ros_task, "uros_task", 8192, NULL, 5, NULL);
