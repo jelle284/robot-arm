@@ -1,0 +1,11 @@
+# FollowStepperTrajectory.action
+
+# Goal definition
+StepperTrajectory trajectory
+---
+# Result definition
+int32 error_code
+---
+# Feedback definition
+int64[] current_positions # Current positions in microsteps for each motor
+int64 time_elapsed        # Time elapsed in microseconds

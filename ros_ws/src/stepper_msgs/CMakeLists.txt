@@ -10,9 +10,9 @@ find_package(ament_cmake REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
-  "msg/StepperFeedback.msg"
-  "msg/StepperPoint.msg"
+  "action/FollowStepperTrajectory.action"
   "msg/StepperTrajectory.msg"
+  "msg/StepperTrajectoryPoint.msg"
 )
 
 if(BUILD_TESTING)

@@ -5,14 +5,6 @@
 
 #define MOTION_AXIS_NUM 6
 
-typedef enum {
-    MS_UNINITIALIZED,
-    MS_IDLE,
-    MS_LOADING,
-    MS_EXECUTING,
-    MS_COMPLETE
-} motion_state_t;
-
 typedef struct {
     int32_t steps_executed[MOTION_AXIS_NUM];
     uint8_t current_point;

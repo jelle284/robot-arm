@@ -13,6 +13,13 @@
 /* ===================================================== */
 /*                     PRIVATE TYPES                     */
 /* ===================================================== */
+typedef enum {
+    MS_UNINITIALIZED,
+    MS_IDLE,
+    MS_LOADING,
+    MS_EXECUTING,
+    MS_COMPLETE
+} motion_state_t;
 
 typedef struct {
     int16_t steps;

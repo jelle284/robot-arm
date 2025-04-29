@@ -1,4 +1,2 @@
-uint32 transmission_id
-uint16 partial_count
-uint16 partial_total
-StepperPoint[] points
+# StepperTrajectory.msg
+StepperTrajectoryPoint[] points  # A list of trajectory points
