@@ -13,7 +13,7 @@ typedef struct {
 
 void motion_system_init(const int* pul_pins, const int* dir_pins);
 
-void motion_load_trajectory(int16_t *steps, uint32_t duration_ms);
+void motion_load_trajectory(int64_t acceleration, int64_t velocity, int64_t position, int64_t time_from_start);
 
 void motion_execute();
 

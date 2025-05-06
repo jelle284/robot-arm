@@ -8,8 +8,8 @@
 #include "esp_log.h"
 
 #define FB_RDY_BIT BIT0
-#define MOTION_BUFFER_SIZE 256
-
+#define MOTION_BUFFER_SIZE 128
+#define VMIN 1000*1000
 /* ===================================================== */
 /*                     PRIVATE TYPES                     */
 /* ===================================================== */
@@ -22,21 +22,22 @@ typedef enum {
 } motion_state_t;
 
 typedef struct {
-    int16_t steps;
-    uint16_t pulse_us;
-    uint16_t delay_ms;
+    int64_t position;
+    int64_t velocity;
+    int64_t acceleration;
+    int64_t time_from_start;
 } motion_instruction_t;
 
 typedef struct {
     size_t data_position;
-    uint16_t step_count;
-    uint16_t delay_count;
+    int64_t time_us;
+    int64_t steps_moved;
 } stepper_encoder_ctx_t;
 
 typedef struct {
-    size_t              index;
-    gpio_num_t          pul_pin;
-    gpio_num_t          dir_pin;
+    size_t index;
+    gpio_num_t pul_pin;
+    gpio_num_t dir_pin;
     rmt_encoder_handle_t encoder;
     stepper_encoder_ctx_t encoder_ctx;
     motion_instruction_t data[MOTION_BUFFER_SIZE];
@@ -65,49 +66,72 @@ size_t stepper_encoder_cb(const void *data, size_t data_size,
     size_t symbols_written, size_t symbols_free, rmt_symbol_word_t *symbols,
     bool *done, void *arg)
 {
+    // retrieve command buffer and values from encoding context
     motion_instruction_t *cmd = (motion_instruction_t*)data;
     stepper_encoder_ctx_t *ctx = (stepper_encoder_ctx_t*)arg;
     size_t idx = ctx->data_position;
-    uint16_t step_count = ctx->step_count;
-    uint16_t delay_count = ctx->delay_count;
+    int64_t t = ctx->time_us;
+    int64_t z = ctx->steps_moved;
+
+    // Start encoding symbols
     size_t i = 0;
     *done = false;
     while (i < symbols_free) {
-        // First encode whatever steps we have
-        bool has_steps = step_count < abs(cmd[idx].steps);
-        if (has_steps) {
-            symbols[i].level0 = 1;
-            symbols[i].duration0 = cmd[idx].pulse_us / 2;
+        // retrieve values from current command
+        const int64_t ts = cmd[idx + 1].time_from_start - cmd[idx].time_from_start;
+        const int64_t a0 = cmd[idx].acceleration;
+        const int64_t v0 = cmd[idx].velocity;
+        const int64_t x0 = cmd[idx].position;
+
+        // encode with current point while time is less than that of next point
+        if (t < ts) {
+            // calculate equation of motion to current time
+            int64_t v = (a0*t)/1000 + v0;
+            int64_t x = (a0*t*t)/(2*1000*1000) + (v0*t)/1000 + x0;
+
+            // ensure we stay below the minimum step time
+            int64_t vdiv;
+            if (v > VMIN || v < -VMIN) {
+                vdiv = llabs(v);
+            }
+            else {
+                vdiv = VMIN;
+            }
+            int64_t dt = (1000*1000*1000)/vdiv;
+
+            // check that we don't exceed time remaining
+            if (t + dt > ts) {
+                dt = ts - t;
+            }
+
+            // determine if we should step now or not
+            bool step_forward = x-z > 500*1000 && v > 0;
+            bool step_reverse = x-z < -500*1000 && v < 0;
+            if (step_forward || step_reverse) {
+                symbols[i].level0 = 1;
+                z += 1000*1000;
+            } else {
+                symbols[i].level0 = 0;
+            }
+            symbols[i].duration0 = dt / 2;
             symbols[i].level1 = 0;
-            symbols[i].duration1 = cmd[idx].pulse_us / 2;
+            symbols[i].duration1 = dt / 2;
+
+            // advance to next symbol
             i++;
-            step_count++;
+            t += dt;
             continue;
         }
-        // If we also have delay when encode them in the end
-        bool has_delay = delay_count < cmd[idx].delay_ms;
-        if  (has_delay) {
-            symbols[i].level0 = 0;
-            symbols[i].duration0 = 1000;
-            symbols[i].level1 = 0;
-            symbols[i].duration1 = 1000;
-            i++;
-            delay_count++;
-            continue;
-        }
-        // If we are here then there are no more steps or delays
-        // and we move to the next index.
-        step_count = 0;
-        delay_count = 0;
+        // If we are here all steps have been encoded
+        // and we move to next data point
         idx++;
-        if (idx >= data_size) { 
+        if (idx >= data_size - 1) { 
             *done = true; 
             break;
         }
     }
-    ctx->step_count = step_count;
-    ctx->delay_count = delay_count;
     ctx->data_position = idx;
+    ctx->time_us = t;
     return i;
 }
 
@@ -117,7 +141,7 @@ static bool IRAM_ATTR exec_timer_cb(gptimer_handle_t timer, const gptimer_alarm_
     
     // Submit feedback
     for (int i = 0; i < MOTION_AXIS_NUM; ++i) {
-        exec_steps[i] += axes[i].data[exec_index].steps;
+        exec_steps[i] = axes[i].data[exec_index].position;
     }
     xEventGroupSetBitsFromISR(motion_event_group, FB_RDY_BIT, &high_task_awoken);
 
@@ -126,7 +150,7 @@ static bool IRAM_ATTR exec_timer_cb(gptimer_handle_t timer, const gptimer_alarm_
     motion_instruction_t instr;
     for (int i = 0; i < MOTION_AXIS_NUM; ++i) {
         instr = axes[i].data[exec_index];
-        gpio_set_level(axes[i].dir_pin, (instr.steps < 0) ? 1 : 0);
+        gpio_set_level(axes[i].dir_pin, (instr.velocity < 0) ? 1 : 0);
     }
     
     // reconfigure alarm value
@@ -206,7 +230,7 @@ void motion_system_init(const int* pul_pins, const int* dir_pins) {
     motion_state = MS_IDLE;
 }   
 
-void motion_load_trajectory(int16_t* steps, uint32_t duration_ms) {
+void motion_load_trajectory(int64_t acceleration, int64_t velocity, int64_t position, int64_t time_from_start) {
     switch(motion_state) {
         case MS_UNINITIALIZED:
             ESP_LOGE("motion", "Motion is uninitalized!");
@@ -227,33 +251,15 @@ void motion_load_trajectory(int16_t* steps, uint32_t duration_ms) {
         return;
     }
     for (size_t i = 0; i < MOTION_AXIS_NUM; ++i) {
-        motion_instruction_t cmd;
-        cmd.steps = steps[i];
-        cmd.delay_ms = 0;
-        // If we have zero steps we just delay
-        if (cmd.steps == 0) {
-            cmd.delay_ms = duration_ms;
-        } else {
-            // first we check for potential overflow in pulse micros
-            // if we have overflow we shorten the duration and add delay
-            // to make up the time
-            uint32_t temp_us = (1000*duration_ms) / abs(cmd.steps);
-            if (temp_us > UINT16_MAX) { 
-                uint16_t max_duration_ms = abs(cmd.steps)*(UINT16_MAX/1000);
-                uint16_t delay_ms = duration_ms - max_duration_ms;
-                cmd.delay_ms = delay_ms;
-                temp_us = UINT16_MAX;
-                ESP_LOGW("motion", "Overflow in pulse width. Inserting delay of %hu", delay_ms);
-            }
-            cmd.pulse_us = temp_us;
-        }
+        motion_instruction_t cmd = {
+            .acceleration = acceleration,
+            .velocity = velocity,
+            .position = position,
+            .time_from_start = time_from_start
+        };
         axes[i].data[load_index] = cmd;
     }
-    uint64_t next_ts = duration_ms*1000;
-    if (load_index > 0) {
-        next_ts += exec_time_us[load_index-1];
-    }
-    exec_time_us[load_index] = next_ts;
+    exec_time_us[load_index] = time_from_start;
     load_index++;
 }
 
@@ -270,10 +276,10 @@ void motion_execute() {
     // Prepare for execution
     for (size_t i = 0; i < MOTION_AXIS_NUM; ++i) {
         axes[i].encoder_ctx.data_position = 0;
-        axes[i].encoder_ctx.step_count = 0;
-        axes[i].encoder_ctx.delay_count = 0;
+        axes[i].encoder_ctx.steps_moved = 0;
+        axes[i].encoder_ctx.time_us = 0;
         ESP_ERROR_CHECK( rmt_encoder_reset(axes[i].encoder) );
-        gpio_set_level(axes[i].dir_pin, (axes[i].data[0].steps < 0) ? 1 : 0);
+        gpio_set_level(axes[i].dir_pin, (axes[i].data[0].velocity < 0) ? 1 : 0);
         exec_steps[i] = 0;
     }
     exec_index = 0;
