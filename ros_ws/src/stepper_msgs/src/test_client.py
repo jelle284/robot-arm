@@ -17,24 +17,24 @@ class StepperActionClient(Node):
     def send_goal(self):
         goal_msg = FollowStepperTrajectory.Goal()
         accel = StepperTrajectoryPoint()
-        accel.accelerations = [4000]
-        accel.velocities = [0]
-        accel.positions = [0]
+        accel.accelerations = [4000] + [0]*5
+        accel.velocities = [0] + [0]*5
+        accel.positions = [0] + [0]*5
         accel.time_from_start = 0
         cruise = StepperTrajectoryPoint()
-        cruise.accelerations = [0]
-        cruise.velocities = [4000*1000]
-        cruise.positions = [2000*1000*1000]
+        cruise.accelerations = [0] + [0]*5
+        cruise.velocities = [4000*1000] + [0]*5
+        cruise.positions = [2000*1000*1000] + [0]*5
         cruise.time_from_start = 1*1000*1000
         decel = StepperTrajectoryPoint()
-        decel.accelerations = [-4000]
-        decel.velocities = [4000*1000]
-        decel.positions = [6000*1000*1000]
+        decel.accelerations = [-4000] + [0]*5
+        decel.velocities = [4000*1000] + [0]*5
+        decel.positions = [6000*1000*1000] + [0]*5
         decel.time_from_start = 2*1000*1000
         ending = StepperTrajectoryPoint()
-        ending.accelerations = [0]
-        ending.velocities = [0]
-        ending.positions = [8000*1000*1000]
+        ending.accelerations = [0] + [0]*5
+        ending.velocities = [0] + [0]*5
+        ending.positions = [8000*1000*1000] + [0]*5
         ending.time_from_start = 3*1000*1000
 
         goal_msg.trajectory.points = [accel, cruise, decel, ending]
