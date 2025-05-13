@@ -34,7 +34,7 @@ def make_tf(config: dict):
 
 def convert_joint_to_steps(positions: array, inv_tf: np.array):
     steps = inv_tf@positions
-    return array('i', steps.astype(int).tolist())
+    return array('q', steps.astype(int).tolist())
 
 def convert_steps_to_joint(steps: array, tf: np.array):
     joints = tf@steps
