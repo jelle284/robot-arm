@@ -8,7 +8,6 @@
 #include "esp_log.h"
 
 #define FB_RDY_BIT BIT0
-#define MOTION_BUFFER_SIZE 128
 #define VMIN 1000*1000
 /* ===================================================== */
 /*                     PRIVATE TYPES                     */
@@ -25,7 +24,6 @@ typedef struct {
     int64_t position;
     int64_t velocity;
     int64_t acceleration;
-    int64_t time_from_start;
 } motion_instruction_t;
 
 typedef struct {
@@ -53,7 +51,7 @@ motion_state_t          motion_state = MS_UNINITIALIZED;
 size_t                  load_index;
 size_t                  exec_index;
 uint64_t                exec_time_us[MOTION_BUFFER_SIZE];
-int32_t                 exec_steps[MOTION_AXIS_NUM];
+int64_t                 exec_steps[MOTION_AXIS_NUM];
 gptimer_handle_t        exec_timer;
 
 EventGroupHandle_t      motion_event_group;
@@ -78,7 +76,7 @@ size_t stepper_encoder_cb(const void *data, size_t data_size,
     *done = false;
     while (i < symbols_free) {
         // retrieve values from current command
-        const int64_t ts = cmd[idx + 1].time_from_start - cmd[idx].time_from_start;
+        const int64_t ts = exec_time_us[idx + 1] - exec_time_us[idx];
         const int64_t a0 = cmd[idx].acceleration;
         const int64_t v0 = cmd[idx].velocity;
         const int64_t x0 = cmd[idx].position;
@@ -107,9 +105,10 @@ size_t stepper_encoder_cb(const void *data, size_t data_size,
             // determine if we should step now or not
             bool step_forward = x-z > 500*1000 && v > 0;
             bool step_reverse = x-z < -500*1000 && v < 0;
+            if (step_forward) { z += 1000*1000; }
+            if (step_reverse) { z -= 1000*1000; }
             if (step_forward || step_reverse) {
                 symbols[i].level0 = 1;
-                z += 1000*1000;
             } else {
                 symbols[i].level0 = 0;
             }
@@ -125,7 +124,8 @@ size_t stepper_encoder_cb(const void *data, size_t data_size,
         // If we are here all steps have been encoded
         // and we move to next data point
         idx++;
-        if (idx >= data_size - 1) { 
+        t = 0;
+        if (idx >= (data_size - 1)) { 
             *done = true; 
             break;
         }
@@ -138,25 +138,20 @@ size_t stepper_encoder_cb(const void *data, size_t data_size,
 static bool IRAM_ATTR exec_timer_cb(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_data)
 {
     BaseType_t high_task_awoken = pdFALSE;
-    
-    // Submit feedback
-    for (int i = 0; i < MOTION_AXIS_NUM; ++i) {
-        exec_steps[i] = axes[i].data[exec_index].position;
-    }
-    xEventGroupSetBitsFromISR(motion_event_group, FB_RDY_BIT, &high_task_awoken);
 
-    // Update direction pins for next instruction
+    // Submit feedback and update direction pins
     exec_index++;
     motion_instruction_t instr;
     for (int i = 0; i < MOTION_AXIS_NUM; ++i) {
         instr = axes[i].data[exec_index];
+        exec_steps[i] = instr.position;
         gpio_set_level(axes[i].dir_pin, (instr.velocity < 0) ? 1 : 0);
     }
-    
+    xEventGroupSetBitsFromISR(motion_event_group, FB_RDY_BIT, &high_task_awoken);
     // reconfigure alarm value
-    if (exec_index < load_index) {
+    if (exec_index < (load_index-1)) {
         gptimer_alarm_config_t alarm_config = {
-            .alarm_count = exec_time_us[exec_index],
+            .alarm_count = exec_time_us[exec_index+1],
         };
         gptimer_set_alarm_action(timer, &alarm_config);
     } else {
@@ -196,6 +191,11 @@ void motion_system_init(const int* pul_pins, const int* dir_pins) {
         axes[i].index = i;
         axes[i].pul_pin = pul_pins[i];
         axes[i].dir_pin = dir_pins[i];
+        for (size_t j = 0; j < MOTION_BUFFER_SIZE; ++j) {
+            axes[i].data[j].acceleration = 0;
+            axes[i].data[j].velocity = 0;
+            axes[i].data[j].position = 0;
+        }
 
         // Init direction pin
         gpio_config_t io_conf = {};
@@ -230,7 +230,7 @@ void motion_system_init(const int* pul_pins, const int* dir_pins) {
     motion_state = MS_IDLE;
 }   
 
-void motion_load_trajectory(int64_t acceleration, int64_t velocity, int64_t position, int64_t time_from_start) {
+void motion_load_trajectory(int64_t* acceleration, int64_t* velocity, int64_t* position, int64_t time_from_start) {
     switch(motion_state) {
         case MS_UNINITIALIZED:
             ESP_LOGE("motion", "Motion is uninitalized!");
@@ -252,10 +252,9 @@ void motion_load_trajectory(int64_t acceleration, int64_t velocity, int64_t posi
     }
     for (size_t i = 0; i < MOTION_AXIS_NUM; ++i) {
         motion_instruction_t cmd = {
-            .acceleration = acceleration,
-            .velocity = velocity,
-            .position = position,
-            .time_from_start = time_from_start
+            .acceleration = acceleration[i],
+            .velocity = velocity[i],
+            .position = position[i]
         };
         axes[i].data[load_index] = cmd;
     }
@@ -265,8 +264,8 @@ void motion_load_trajectory(int64_t acceleration, int64_t velocity, int64_t posi
 
 void motion_execute() {
     // check if we have points to execute
-    if (load_index == 0) { 
-        ESP_LOGE("motion", "No points in loaded. Failed to execute.");
+    if (load_index < 2) { 
+        ESP_LOGE("motion", "Need at least 2 points loaded. Failed to execute.");
         return;
     }
 
@@ -283,10 +282,19 @@ void motion_execute() {
         exec_steps[i] = 0;
     }
     exec_index = 0;
-    
+
+    /* DEBUG LOGGING */
+    for (size_t i = 0; i < load_index; ++i) {
+        ESP_LOGI("motion", "exec_time_us[%zu]: %lld", i, exec_time_us[i]);
+        for (size_t j = 0; j < MOTION_AXIS_NUM; ++j) {
+            ESP_LOGI("motion", "axes[%zu].data[%zu]: acceleration=%lld, velocity=%lld, position=%lld",
+                    j, i, axes[j].data[i].acceleration, axes[j].data[i].velocity, axes[j].data[i].position);
+        }
+    }
+
     // Setup Timer
     gptimer_alarm_config_t alarm_config = {
-        .alarm_count = exec_time_us[0],
+        .alarm_count = exec_time_us[1],
     };
     ESP_ERROR_CHECK( gptimer_set_alarm_action(exec_timer, &alarm_config) );
 
@@ -326,8 +334,7 @@ int motion_get_feedback(motion_feedback_t *state) {
         for (int i = 0; i < MOTION_AXIS_NUM; ++i) {
             state->steps_executed[i] = exec_steps[i];
         }
-        state->current_point = exec_index;
-        state->total_points = load_index;
+        state->time_elapsed = exec_time_us[exec_index];
         xEventGroupClearBits(motion_event_group, FB_RDY_BIT);
         return 1;
     }

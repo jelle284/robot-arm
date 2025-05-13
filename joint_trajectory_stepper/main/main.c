@@ -36,6 +36,13 @@ static const char* TAG = "main";
 // Event group
 EventGroupHandle_t main_event_group;
 
+// Goal memory
+point_t points[MOTION_BUFFER_SIZE];
+int64_t accelerations[MOTION_AXIS_NUM][MOTION_BUFFER_SIZE];
+int64_t velocities[MOTION_AXIS_NUM][MOTION_BUFFER_SIZE];
+int64_t positions[MOTION_AXIS_NUM][MOTION_BUFFER_SIZE];
+
+
 /* ============================ GOAL HANDLING ============================*/
 #define VMIN 1000*1000
 
@@ -44,54 +51,40 @@ void process_goal(void* arg) {
     // recieve goal
     rclc_action_goal_handle_t * goal_handle = (rclc_action_goal_handle_t *) arg;
     goal_req_t* req = (goal_req_t*)goal_handle->ros_goal_request;
-
-    // init feedback
-    feedback_t feedback;
-    int64_t feedback_data[1];
-    feedback.feedback.current_positions.capacity = MOTION_AXIS_NUM;
-    feedback.feedback.current_positions.size = 1;
-    feedback.feedback.current_positions.data = feedback_data;
-
-    // loop over points
-    for (size_t i = 0; i < req->goal.trajectory.points.size - 1; ++i) {
-        point_t p_current = req->goal.trajectory.points.data[i];
-        point_t p_next = req->goal.trajectory.points.data[i + 1];
-        if (p_current.accelerations.size > 0
-            && p_current.velocities.size > 0
-            && p_current.positions.size  > 0) {
-            const int64_t ts = p_next.time_from_start - p_current.time_from_start;
-            const int64_t a0 = p_current.accelerations.data[0];
-            const int64_t v0 = p_current.velocities.data[0];
-            const int64_t x0 = p_current.positions.data[0];
-            int64_t t = 0;
-            int64_t x = x0;
-            int64_t v = v0;
-            while (t < ts) {
-                int64_t vdiv;
-                if (v > VMIN || v < -VMIN) {
-                    vdiv = llabs(v);
-                }
-                else {
-                    vdiv = VMIN;
-                }
-                int64_t dt = (1000*1000*1000)/vdiv;
-                t += dt;
-                v = (a0*t)/1000 + v0;
-                x = (a0*t*t)/(2*1000*1000) + (v0*t)/1000 + x0;
+    for (size_t i = 0; i < req->goal.trajectory.points.size; ++i) {
+        point_t p = req->goal.trajectory.points.data[i];
+        if (p.accelerations.size == MOTION_AXIS_NUM
+            && p.velocities.size == MOTION_AXIS_NUM
+            && p.positions.size == MOTION_AXIS_NUM) {
+                motion_load_trajectory(
+                    p.accelerations.data,
+                    p.velocities.data,
+                    p.positions.data,
+                    p.time_from_start);
             }
-            feedback.feedback.time_elapsed = t+p_current.time_from_start;
-            feedback_data[0] = x;
-            rclc_action_publish_feedback(goal_handle, &feedback);
-            vTaskDelay(pdMS_TO_TICKS(ts/1000));
+    }
+    xEventGroupSetBits(main_event_group, BIT1);
+    // init feedback
+    motion_feedback_t motion_fb;
+    feedback_t feedback_msg;
+    feedback_msg.feedback.current_positions.capacity = MOTION_AXIS_NUM;
+    feedback_msg.feedback.current_positions.size = MOTION_AXIS_NUM;
+    feedback_msg.feedback.current_positions.data = motion_fb.steps_executed;
+    while ((xEventGroupGetBits(main_event_group) & BIT2) == 0) {
+        if (motion_get_feedback(&motion_fb) > 0) {
+            feedback_msg.feedback.time_elapsed = motion_fb.time_elapsed;
+            rclc_action_publish_feedback(goal_handle, &feedback_msg);
+            vTaskDelay(pdMS_TO_TICKS(200));
         }
     }
+    xEventGroupClearBits(main_event_group, BIT2);
+    
     rcl_action_goal_state_t goal_state = GOAL_STATE_SUCCEEDED;
     response_t response = {0};
     response.result.error_code = 0;
     rcl_ret_t rc = RCLC_RET_ACTION_WAIT_RESULT_REQUEST;
     while (rc != RCL_RET_OK) {
       rc = rclc_action_send_result(goal_handle, goal_state, &response);
-      vTaskDelay(pdMS_TO_TICKS(1000));
     };
     vTaskDelete(NULL);
 }
@@ -99,15 +92,7 @@ void process_goal(void* arg) {
 rcl_ret_t handle_goal(rclc_action_goal_handle_t * goal_handle, void * context)
 {
     goal_req_t* req = (goal_req_t*)goal_handle->ros_goal_request;
-    ESP_LOGI(TAG, "Received goal");
-    for (size_t i = 0; i < req->goal.trajectory.points.size; ++i) {
-        point_t p = req->goal.trajectory.points.data[i];
-        for (size_t j = 0; j < p.accelerations.size; ++j) {
-            ESP_LOGI(TAG, "accel: %lld", p.accelerations.data[0]);
-            ESP_LOGI(TAG, "vel: %lld", p.velocities.data[0]);
-            ESP_LOGI(TAG, "pos: %lld", p.positions.data[0]);
-        }
-    }
+    (void) req;
     ESP_LOGI(TAG, "Goal accepted");
     xTaskCreate(process_goal, "process_goal", 4096, goal_handle, 5, NULL);
     
@@ -135,12 +120,13 @@ void motion_task(void* arg)
     ESP_LOGI(TAG, "Motion setup successfully. Starting transmission loop.");
     for (;;) {
         // Wait for the event to start execution
-        xEventGroupWaitBits(main_event_group, BIT1, pdTRUE, pdFALSE, portMAX_DELAY);
+        xEventGroupWaitBits(main_event_group, BIT1, pdFALSE, pdFALSE, portMAX_DELAY);
 
         ESP_LOGI(TAG, "Executing motion.");
         motion_execute();
         ESP_LOGI(TAG, "Execution done.");
-
+        xEventGroupClearBits(main_event_group, BIT1);
+        xEventGroupSetBits(main_event_group, BIT2);
     }
 }
 
@@ -188,11 +174,8 @@ void micro_ros_task(void * arg)
 
     // Add action server to executor
     goal_req_t goal_req;
-    point_t points[10];
-    int64_t accelerations[MOTION_AXIS_NUM][10];
-    int64_t velocities[MOTION_AXIS_NUM][10];
-    int64_t positions[MOTION_AXIS_NUM][10];
-    for (size_t i = 0; i < 10; ++i) {
+
+    for (size_t i = 0; i < MOTION_BUFFER_SIZE; ++i) {
         points[i].accelerations.capacity = MOTION_AXIS_NUM;
         points[i].accelerations.data = accelerations[i];
         points[i].accelerations.size = 0;
@@ -204,7 +187,7 @@ void micro_ros_task(void * arg)
         points[i].positions.size = 0;
         points[i].time_from_start = 0;
     }
-    goal_req.goal.trajectory.points.capacity = 10;
+    goal_req.goal.trajectory.points.capacity = MOTION_BUFFER_SIZE;
     goal_req.goal.trajectory.points.size = 0;
     goal_req.goal.trajectory.points.data = points;
     RCCHECK(rclc_executor_add_action_server(
