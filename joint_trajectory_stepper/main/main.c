@@ -36,13 +36,6 @@ static const char* TAG = "main";
 // Event group
 EventGroupHandle_t main_event_group;
 
-// Goal memory
-point_t points[MOTION_BUFFER_SIZE];
-int64_t accelerations[MOTION_AXIS_NUM][MOTION_BUFFER_SIZE];
-int64_t velocities[MOTION_AXIS_NUM][MOTION_BUFFER_SIZE];
-int64_t positions[MOTION_AXIS_NUM][MOTION_BUFFER_SIZE];
-
-
 /* ============================ GOAL HANDLING ============================*/
 #define VMIN 1000*1000
 
@@ -174,22 +167,21 @@ void micro_ros_task(void * arg)
 
     // Add action server to executor
     goal_req_t goal_req;
-
-    for (size_t i = 0; i < MOTION_BUFFER_SIZE; ++i) {
-        points[i].accelerations.capacity = MOTION_AXIS_NUM;
-        points[i].accelerations.data = accelerations[i];
-        points[i].accelerations.size = 0;
-        points[i].velocities.capacity = MOTION_AXIS_NUM;
-        points[i].velocities.data = velocities[i];
-        points[i].velocities.size = 0;
-        points[i].positions.capacity = MOTION_AXIS_NUM;
-        points[i].positions.data = positions[i];
-        points[i].positions.size = 0;
-        points[i].time_from_start = 0;
-    }
     goal_req.goal.trajectory.points.capacity = MOTION_BUFFER_SIZE;
     goal_req.goal.trajectory.points.size = 0;
-    goal_req.goal.trajectory.points.data = points;
+    goal_req.goal.trajectory.points.data = malloc(MOTION_BUFFER_SIZE*sizeof(stepper_msgs__msg__StepperTrajectoryPoint));
+    for (size_t i = 0; i < MOTION_BUFFER_SIZE; ++i) {
+        goal_req.goal.trajectory.points.data[i].accelerations.capacity = MOTION_BUFFER_SIZE;
+        goal_req.goal.trajectory.points.data[i].accelerations.size = 0;
+        goal_req.goal.trajectory.points.data[i].accelerations.data = malloc(MOTION_AXIS_NUM*sizeof(int64_t));
+        goal_req.goal.trajectory.points.data[i].velocities.capacity = MOTION_BUFFER_SIZE;
+        goal_req.goal.trajectory.points.data[i].velocities.size = 0;
+        goal_req.goal.trajectory.points.data[i].velocities.data = malloc(MOTION_AXIS_NUM*sizeof(int64_t));
+        goal_req.goal.trajectory.points.data[i].positions.capacity = MOTION_BUFFER_SIZE;
+        goal_req.goal.trajectory.points.data[i].positions.size = 0;
+        goal_req.goal.trajectory.points.data[i].positions.data = malloc(MOTION_AXIS_NUM*sizeof(int64_t));
+    }
+    
     RCCHECK(rclc_executor_add_action_server(
         &executor, 
         &action_server, 
@@ -210,19 +202,17 @@ void micro_ros_task(void * arg)
 		rclc_executor_spin_some(&executor, RCL_MS_TO_NS(10));
 		usleep(100*1000);
 	}
-
     // Free resources.
     RCCHECK(rcl_node_fini(&node));
-
     vTaskDelete(NULL);
 }
 
 /* ============================ APP MAIN ============================*/
 void app_main()
 {
-    esp_log_level_set("*", ESP_LOG_INFO);
+    esp_log_level_set("*", ESP_LOG_ERROR);
     network_init();
     main_event_group = xEventGroupCreate();
-    xTaskCreate(micro_ros_task, "uros_task", 8192, NULL, 5, NULL);
+    xTaskCreate(micro_ros_task, "uros_task", 4096, NULL, 5, NULL);
     xTaskCreate(motion_task, "motion_task", 4096, NULL, 5, NULL);
 }

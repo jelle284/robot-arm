@@ -21,6 +21,8 @@ import json
 import os
 from array import array
 
+import pandas as pd
+
 MAX_TOTAL_SIZE = 128
 
 class StepperTrajectoryProcessor(Node):
@@ -93,6 +95,43 @@ class StepperTrajectoryProcessor(Node):
         joint_state_msg.position = self.joint_states_now
         self.joint_state_publisher.publish(joint_state_msg)
 
+    async def save_goal(self, goal_handle):
+        # Extract the goal trajectory
+        goal = goal_handle.request.trajectory
+
+        # Extract data from the JointTrajectory message
+        data = {
+            'time': [],
+            'positions_axis_1': [], 'positions_axis_2': [], 'positions_axis_3': [],
+            'positions_axis_4': [], 'positions_axis_5': [], 'positions_axis_6': [],
+            'velocities_axis_1': [], 'velocities_axis_2': [], 'velocities_axis_3': [],
+            'velocities_axis_4': [], 'velocities_axis_5': [], 'velocities_axis_6': [],
+            'accelerations_axis_1': [], 'accelerations_axis_2': [], 'accelerations_axis_3': [],
+            'accelerations_axis_4': [], 'accelerations_axis_5': [], 'accelerations_axis_6': []
+        }
+
+        for point in goal.points:
+            # Extract time from the point (assuming time_from_start is a Duration type)
+            time = point.time_from_start.sec + point.time_from_start.nanosec / 1e9
+            data['time'].append(time)
+
+            # Extract positions, velocities, and accelerations for each axis
+            for i in range(6):  # Assuming 6 axes
+                data[f'positions_axis_{i+1}'].append(point.positions[i])
+                data[f'velocities_axis_{i+1}'].append(point.velocities[i])
+                data[f'accelerations_axis_{i+1}'].append(point.accelerations[i])
+
+        # Create a DataFrame
+        df = pd.DataFrame(data)
+
+        # Here you can save the DataFrame to a file or process it further
+        df.to_csv("trajectory.csv")
+
+        # Notify the action client that the goal has been achieved
+        goal_handle.succeed()
+        result = FollowJointTrajectory.Result()
+        return result
+    
     async def execute_callback(self, goal_handle: ServerGoalHandle):
         result = FollowJointTrajectory.Result()
         server_req: FollowJointTrajectory.Goal = goal_handle.request

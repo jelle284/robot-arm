@@ -12,9 +12,12 @@ class StepperActionClient(Node):
     def __init__(self):
         super().__init__('stepper_action_client')
         self._action_client = ActionClient(self, FollowStepperTrajectory, '/follow_stepper_trajectory')
-        self.X = [0]
-        self.T = [0]
+        self.X = []
+        self.T = []
     def send_goal(self):
+        DISTANCE = 12000
+        TIME = 5
+        #TODO: calculate from distance and time
         goal_msg = FollowStepperTrajectory.Goal()
         accel = StepperTrajectoryPoint()
         accel.accelerations = [4000] + [0]*5
@@ -61,7 +64,7 @@ class StepperActionClient(Node):
 
     def feedback_callback(self, feedback_msg):
         feedback : FollowStepperTrajectory.Feedback = feedback_msg.feedback
-        self.X.append(feedback.current_positions[0])
+        self.X.append(feedback.current_positions)
         self.T.append(feedback.time_elapsed)
         
 
@@ -74,7 +77,8 @@ def main(args=None):
     rclpy.spin(action_client)
 
     fig, ax = plt.subplots()
-    ax.plot(action_client.T, action_client.X)
+    for i in range(6):
+        ax.plot([0] + action_client.T, [0] + [x[i] for x in action_client.X])
     ax.grid()
     ax.set_title("Client feedback")
     plt.show()
