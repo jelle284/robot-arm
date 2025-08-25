@@ -1,0 +1,70 @@
+<ros2_control name="SixDOFArm" type="system">
+  <hardware>
+    <plugin>robot_stepper_controller/StepperHardwareInterface</plugin>
+  </hardware>
+
+  <joint name="joint_1">
+    <command_interface name="velocity"/>
+    <state_interface name="position"/>
+    <state_interface name="velocity"/>
+    <transmission>
+      <type>transmission_interface/SimpleTransmission</type>
+      <joint name="joint_1"/>
+      <actuator name="joint_1_motor"/>
+      <mechanical_reduction>140.0</mechanical_reduction>
+    </transmission>
+  </joint>
+
+  <joint name="joint_2">
+    <command_interface name="velocity"/>
+    <state_interface name="position"/>
+    <state_interface name="velocity"/>
+    <transmission>
+      <type>transmission_interface/SimpleTransmission</type>
+      <joint name="joint_2"/>
+      <actuator name="joint_2_motor"/>
+      <mechanical_reduction>56.0</mechanical_reduction>
+    </transmission>
+  </joint>
+
+  <joint name="joint_3">
+    <command_interface name="velocity"/>
+    <state_interface name="position"/>
+    <state_interface name="velocity"/>
+    <transmission>
+      <type>transmission_interface/SimpleTransmission</type>
+      <joint name="joint_3"/>
+      <actuator name="joint_3_motor"/>
+      <mechanical_reduction>56.0</mechanical_reduction>
+    </transmission>
+  </joint>
+
+  <joint name="joint_4">
+    <command_interface name="velocity"/>
+    <state_interface name="position"/>
+    <state_interface name="velocity"/>
+    <transmission>
+      <type>transmission_interface/SimpleTransmission</type>
+      <joint name="joint_4"/>
+      <actuator name="joint_4_motor"/>
+      <mechanical_reduction>125.78125</mechanical_reduction>
+    </transmission>
+  </joint>
+
+  <!-- Differential drive for joint 5 and 6 -->
+  <joint name="joint_5">
+    <command_interface name="velocity"/>
+    <state_interface name="position"/>
+    <state_interface name="velocity"/>
+    <transmission>
+      <type>transmission_interface/DifferentialTransmission</type>
+      <joint1 name="joint_5"/>
+      <joint2 name="joint_6"/>
+      <actuator1 name="joint_5_motor"/>
+      <actuator2 name="joint_6_motor"/>
+      <mechanical_reduction1>19.047619047619047</mechanical_reduction1>
+      <mechanical_reduction2>19.047619047619047</mechanical_reduction2>
+    </transmission>
+  </joint>
+
+</ros2_control

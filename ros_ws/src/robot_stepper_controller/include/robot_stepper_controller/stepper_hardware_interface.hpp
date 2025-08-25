@@ -1,11 +1,17 @@
 #ifndef STEPPER_HARDWARE_INTERFACE_HPP
 #define STEPPER_HARDWARE_INTERFACE_HPP
 
+#include <memory>
+
 #include "hardware_interface/system_interface.hpp"
 #include "hardware_interface/types/hardware_interface_return_values.hpp"
 #include "hardware_interface/hardware_info.hpp"
-#include "rclcpp_lifecycle/node_interfaces/lifecycle_node_interface.hpp"
 #include "hardware_interface/types/hardware_interface_return_values.hpp"
+#include "rclcpp_lifecycle/node_interfaces/lifecycle_node_interface.hpp"
+#include "rclcpp/macros.hpp"
+
+#include "stepper_msgs/msg/stepper_command.hpp"
+#include "stepper_msgs/msg/stepper_state.hpp"
 
 namespace stepper_hardware_interface {
         class StepperHardwareInterface : public hardware_interface::SystemInterface {
@@ -16,6 +22,14 @@ namespace stepper_hardware_interface {
             hardware_interface::CallbackReturn on_cleanup(const rclcpp_lifecycle::State & previous_state) override;
             hardware_interface::return_type read(const rclcpp::Time & time, const rclcpp::Duration & period) override;
             hardware_interface::return_type write(const rclcpp::Time & time, const rclcpp::Duration & period) override;
+        private:
+            rclcpp::Node::SharedPtr node_;
+            rclcpp::Publisher<stepper_msgs::msg::StepperCommand>::SharedPtr command_pub_;
+            rclcpp::Subscription<stepper_msgs::msg::StepperState>::SharedPtr state_sub_;
+            std::vector<int32_t> state_position_;
+            std::vector<int32_t> state_velocity_;
+            std::vector<int32_t> command_velocity_;
+
     };
 }
 
