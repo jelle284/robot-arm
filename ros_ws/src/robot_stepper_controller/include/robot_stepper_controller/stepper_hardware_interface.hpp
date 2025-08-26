@@ -13,10 +13,10 @@
 #include "stepper_msgs/msg/stepper_command.hpp"
 #include "stepper_msgs/msg/stepper_state.hpp"
 
-namespace stepper_hardware_interface {
+namespace robot_stepper_controller {
         class StepperHardwareInterface : public hardware_interface::SystemInterface {
         public:
-            StepperHardwareInterface();
+            StepperHardwareInterface() {}
             hardware_interface::CallbackReturn on_init(const hardware_interface::HardwareInfo & info) override;
             hardware_interface::CallbackReturn on_configure(const rclcpp_lifecycle::State & previous_state) override;
             hardware_interface::CallbackReturn on_cleanup(const rclcpp_lifecycle::State & previous_state) override;
@@ -29,6 +29,7 @@ namespace stepper_hardware_interface {
             std::vector<int32_t> state_position_;
             std::vector<int32_t> state_velocity_;
             std::vector<int32_t> command_velocity_;
+            double joint_introspection_;
 
     };
 }

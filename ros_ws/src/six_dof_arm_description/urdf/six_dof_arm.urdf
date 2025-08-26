@@ -14,7 +14,7 @@
 		</collision>
 	</link>
 	
-	<link name="k0">
+	<link name="link_0">
 		<visual>
 			<origin xyz="0 0 0" rpy="0 0 0"/>
 			<geometry>
@@ -35,7 +35,7 @@
 		</collision>
 	</link>
 	
-	<link name="k1">
+	<link name="link_1">
 		<visual>
 			<origin xyz="0 0 0" rpy="1.570796 0 -1.570796"/>
 			<geometry>
@@ -62,7 +62,7 @@
 		</collision>
 	</link>
 	
-	<link name="k2">
+	<link name="link_2">
 		<visual>
 			<origin xyz="0 0 0" rpy="0 -1.570796 0"/>
 			<geometry>
@@ -83,7 +83,7 @@
 		</collision>
 	</link>
 	
-	<link name="k3">
+	<link name="link_3">
 		<visual>
 			<origin xyz="0 0 0" rpy="1.570796 0 0"/>
 			<geometry>
@@ -98,7 +98,7 @@
 		</collision>
 	</link>
 	
-	<link name="k4">
+	<link name="link_4">
 		<visual>
 			<origin xyz="0 0 0" rpy="1.570796 0 0"/>
 			<geometry>
@@ -119,7 +119,7 @@
 		</collision>
 	</link>
 	
-	<link name="k5">
+	<link name="link_5">
 		<visual>
 			<origin xyz="0 0 0" rpy="1.570796 0 0"/>
 			<geometry>
@@ -134,50 +134,50 @@
 		</collision>
 	</link>
 	
-	<joint name="j0" type="revolute">
+	<joint name="joint_0" type="revolute">
 		<origin xyz="0.000 0.000 0.000" rpy="0.00 0.00 0.00"/>
 		<parent link="base_link"/>
-		<child link="k0"/>
+		<child link="link_0"/>
 		<axis xyz="0 0 1"/> 
 		<limit lower="-3.14" upper="3.14" effort="80.0" velocity="2.01"/>
 	</joint>
 	
-	<joint name="j1" type="revolute">
+	<joint name="joint_1" type="revolute">
 		<origin xyz="0.092 -0.160 0.120" rpy="0.00 0.00 0.00"/>
-		<parent link="k0"/>
-		<child link="k1"/>
+		<parent link="link_0"/>
+		<child link="link_1"/>
 		<axis xyz="1 0 0"/>
 		<limit lower="0.0" upper="3.14" effort="50.0" velocity="2.01"/>
 	</joint>
 	
-	<joint name="j2" type="revolute">
+	<joint name="joint_2" type="revolute">
 		<origin xyz="0.000 0.300 0.000" rpy="0.00 0.00 0.00"/>
-		<parent link="k1"/>
-		<child link="k2"/>
+		<parent link="link_1"/>
+		<child link="link_2"/>
 		<axis xyz="-1 0 0"/>
 		<limit lower="0.0872664626" upper="3.141592" effort="50.0" velocity="2.01"/>
 	</joint>
 	
-	<joint name="j3" type="revolute">
+	<joint name="joint_3" type="revolute">
 		<origin xyz="-0.092 -0.080 0.104" rpy="0.00 0.00 0.00"/>
-		<parent link="k2"/>
-		<child link="k3"/>
+		<parent link="link_2"/>
+		<child link="link_3"/>
 		<axis xyz="0 1 0"/>
 		<limit lower="-3.14" upper="3.14" effort="30.0" velocity="2.01"/>
 	</joint>
 	
-	<joint name="j4" type="revolute">
+	<joint name="joint_4" type="revolute">
 		<origin xyz="0.00 -0.202 0.00" rpy="0.00 0.00 0.00"/>
-		<parent link="k3"/>
-		<child link="k4"/>
+		<parent link="link_3"/>
+		<child link="link_4"/>
 		<axis xyz="1 0 0"/>
 		<limit lower="-1.57" upper="1.57" effort="10.0" velocity="2.01"/>
 	</joint>
 	
-	<joint name="j5" type="revolute">
+	<joint name="joint_5" type="revolute">
 		<origin xyz="0.00 -0.062 0.00" rpy="0.00 0.00 0.00"/>
-		<parent link="k4"/>
-		<child link="k5"/>
+		<parent link="link_4"/>
+		<child link="link_5"/>
 		<axis xyz="0 1 0"/>
 		<limit lower="-3.14" upper="3.14" effort="10.0" velocity="2.01"/>
 	</joint>

@@ -9,7 +9,7 @@ def generate_launch_description():
 
     moveit_config = (
         MoveItConfigsBuilder("six_dof_arm")
-        .robot_description(file_path="config/six_dof_arm.urdf.xacro")
+        .robot_description(file_path="config/six_dof_arm.urdf")
         .robot_description_semantic(file_path="config/six_dof_arm.srdf")
         .to_moveit_configs()
     )
@@ -64,7 +64,7 @@ def generate_launch_description():
         [
             rviz_node,
             static_tf,
-            robot_state_publisher,
+            #robot_state_publisher,
             run_move_group_node,
         ]
     )

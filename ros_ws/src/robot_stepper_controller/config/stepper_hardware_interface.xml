@@ -1,0 +1,11 @@
+<library path="robot_stepper_controller">
+  <class
+    name="robot_stepper_controller/StepperHardwareInterface"
+    type="robot_stepper_controller::StepperHardwareInterface"
+    base_class_type="hardware_interface::SystemInterface"
+    lookup="robot_stepper_controller::StepperHardwareInterface">
+    <description>
+      A hardware interface for controlling stepper motors in the robot_stepper_controller package.
+    </description>
+  </class>
+</library>
