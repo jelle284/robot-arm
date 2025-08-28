@@ -1,9 +1,16 @@
 #include "stepper_motor.h"
-
 #include "esp_log.h"
-static const char *TAG = "stepper_motor";
 
 #define PULSE_WIDTH_US 50 // Pulse width in microseconds
+
+static const char *TAG = "stepper_motor";
+static size_t handle_count = 0;
+
+static const int group_map[6] = {
+    0,0,
+    0,1,
+    1,1
+};
 
 struct stepper_motor {
     stepper_motor_status_t status; // Status of the stepper motor
@@ -77,19 +84,21 @@ stepper_motor_handle_t stepper_motor_init(gpio_num_t pul_pin, gpio_num_t dir_pin
     ESP_ERROR_CHECK(pcnt_unit_start(handle->pcnt_unit));
 
     // Set up MCPWM for step signal generation
-    ESP_LOGI(TAG, "Create timer and operator");
+    int group_id = group_map[handle_count];
+    ESP_LOGI(TAG, "Create timer and operator in group %d", group_id);
     mcpwm_timer_config_t timer_config = {
-        .group_id = 0,
+        .group_id = group_id,
         .clk_src = MCPWM_TIMER_CLK_SRC_DEFAULT,
         .resolution_hz = 1000000,
         .period_ticks = 1000,
         .count_mode = MCPWM_TIMER_COUNT_MODE_UP,
     };
     ESP_ERROR_CHECK(mcpwm_new_timer(&timer_config, &handle->mcpwm_timer));
+    handle_count++;
 
     mcpwm_oper_handle_t oper = NULL;
     mcpwm_operator_config_t operator_config = {
-        .group_id = 0, // operator must be in the same group to the timer
+        .group_id = group_id, // operator must be in the same group to the timer
     };
     ESP_ERROR_CHECK(mcpwm_new_operator(&operator_config, &oper));
 

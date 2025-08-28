@@ -1,0 +1,13 @@
+sudo rm -rf build log install
+
+colcon build
+
+source install/setup.bash
+
+ros2 topic pub --once /stepper_command stepper_msgs/msg/StepperCommand "{position: [0, 0, 0, 0, 0, 0]}"
+
+ros2 topic echo /stepper_state
+
+ros2 launch robot_stepper_controller stepper_control.launch.py
+
+ros2 launch robot_stepper_controller planning.launch.py

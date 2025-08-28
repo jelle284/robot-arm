@@ -1,7 +1,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
-static const char *TAG = "main";
+
 
 // For wifi connection
 #include "net_connection.h"
@@ -16,22 +16,28 @@ static const char *TAG = "main";
 #include <rclc/executor.h>
 #include <rmw_microros/rmw_microros.h>
 
+// For stepper motor control
+#include "stepper_motor.h"
+#include "pid_controller.h"
+
 #define RCCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){printf("Failed status on line %d: %d. Aborting.\n",__LINE__,(int)temp_rc);vTaskDelete(NULL);}}
 #define RCSOFTCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){printf("Failed status on line %d: %d. Continuing.\n",__LINE__,(int)temp_rc);}}
 
-rcl_publisher_t publisher;
-rcl_subscription_t subscriber;
-stepper_msgs__msg__StepperCommand stepper_command;;
-stepper_msgs__msg__StepperState stepper_state;
-
-void micro_ros_task(void* arg);
-
-// For stepper motor control
-#include "stepper_motor.h"
 #define AXIS_NUM 6 // Number of stepper motors
+
 stepper_motor_handle_t motor_handle[AXIS_NUM];
 const int pulse_pins[] = {26, 14, 23, 33, 18, 21};
 const int dir_pins[] = {27, 13, 4, 25, 19, 22};
+int target_position[AXIS_NUM] = {0};
+
+rcl_publisher_t publisher;
+rcl_subscription_t subscriber;
+stepper_msgs__msg__StepperCommand stepper_command;
+stepper_msgs__msg__StepperState stepper_state;
+static const char *TAG = "main";
+
+void control_loop(void* arg);
+void micro_ros_task(void* arg);
 
 // Main application
 void app_main() 
@@ -46,6 +52,35 @@ void app_main()
     }
     network_init();
     xTaskCreate(micro_ros_task, "micro_ros_task", 4096, NULL, 5, NULL);
+    xTaskCreate(control_loop, "control_loop", 4096, NULL, 5, NULL);
+}
+
+void control_loop(void* arg) {
+    pid_param_t params;
+    params.kp = 1.0f;
+    params.ki = 0.2f;
+    params.kd = 0.0f;
+    params.kt = 1.0f;
+    params.output_min = -5000.0f;
+    params.output_max = 5000.0f;
+    params.update_period = 0.01f;
+    pid_state_t states[AXIS_NUM];
+    for (size_t i = 0; i < AXIS_NUM; ++i) {
+        pid_init(&states[i]);
+    }
+    TickType_t ticks = xTaskGetTickCount();
+    for (;;) {
+        for (size_t i = 0; i < AXIS_NUM; ++i) {
+            if (motor_handle[i] == NULL) {
+                continue;
+            }
+            float measurement = (float)stepper_motor_get_position(motor_handle[i]);
+            float setpoint = (float)target_position[i];
+            float control_signal = pid_update(&states[i], &params, setpoint, measurement);
+            stepper_motor_set_speed(motor_handle[i], (int)control_signal);
+        }
+        xTaskDelayUntil(&ticks, pdMS_TO_TICKS(10));
+    }
 }
 
 // Micro-ROS stuff below
@@ -53,13 +88,13 @@ void subscription_callback(const void * msgin)
 {
 	const stepper_msgs__msg__StepperCommand * msg = (const stepper_msgs__msg__StepperCommand *)msgin;
     for (int i = 0; i < AXIS_NUM; i++) {
-        if (i > msg->velocity.size) {
+        if (i > msg->position.size) {
             break;
         }
         if (motor_handle[i] == NULL) {
             continue;
         }
-        stepper_motor_set_speed(motor_handle[i], msg->velocity.data[i]);
+        target_position[i] = msg->position.data[i];
     }
 }
 
@@ -67,12 +102,16 @@ void timer_callback(rcl_timer_t * timer, int64_t last_call_time)
 {
 	(void) last_call_time;
 	if (timer != NULL) {
+        stepper_state.position.size = 0;
+        stepper_state.velocity.size = 0;
         for (int i = 0; i < AXIS_NUM; i++) {
             if (motor_handle[i] == NULL) {
                 continue;
             }
             stepper_state.position.data[i] = stepper_motor_get_position(motor_handle[i]);
             stepper_state.velocity.data[i] = stepper_motor_get_speed(motor_handle[i]);
+            stepper_state.position.size++;
+            stepper_state.velocity.size++;
         }
 		RCSOFTCHECK(rcl_publish(&publisher, &stepper_state, NULL));
 	}
@@ -86,7 +125,7 @@ void micro_ros_task(void * arg)
 
     rcl_init_options_t init_options = rcl_get_zero_initialized_init_options();
     RCCHECK(rcl_init_options_init(&init_options, allocator));
-    RCCHECK(rcl_init_options_set_domain_id(&init_options, 1));
+    RCCHECK(rcl_init_options_set_domain_id(&init_options, 0));
 
     // Setup rmw options and ping agent
     rmw_init_options_t* rmw_options = rcl_init_options_get_rmw_init_options(&init_options);
@@ -121,9 +160,9 @@ void micro_ros_task(void * arg)
 		"stepper_command"));
     
     // Allocate memory for stepper messages
-    stepper_command.velocity.capacity = AXIS_NUM;
-    stepper_command.velocity.size = 0;
-    stepper_command.velocity.data = (int32_t*)malloc(AXIS_NUM * sizeof(int32_t));
+    stepper_command.position.capacity = AXIS_NUM;
+    stepper_command.position.size = 0;
+    stepper_command.position.data = (int32_t*)malloc(AXIS_NUM * sizeof(int32_t));
     stepper_state.position.capacity = AXIS_NUM;
     stepper_state.position.size = 0;
     stepper_state.position.data = (int32_t*)malloc(AXIS_NUM * sizeof(int32_t));

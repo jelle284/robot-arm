@@ -4,7 +4,7 @@
 #include "rclcpp/rclcpp.hpp"
 
 static const std::vector<double> gear_ratio = {140.0, 56.0, 56.0, 125.78125, 19.047619047619047, 19.047619047619047}; // TODO: Get from joint configuration
-static const std::vector<double> home_position = {0.0, 0.0, 0.20, 0.0, 0.0, 0.0}; // TODO: Get from joint configuration
+static const std::vector<double> home_position = {0.0, 0.0, 0.2, 0.0, 0.0, 0.0}; // TODO: Get from joint configuration
 static const double steps_per_rev = 800.0; // TODO: Get from joint configuration
 
 hardware_interface::CallbackReturn robot_stepper_controller::StepperHardwareInterface::on_init(const hardware_interface::HardwareInfo &info)
@@ -13,10 +13,6 @@ hardware_interface::CallbackReturn robot_stepper_controller::StepperHardwareInte
     {
         return CallbackReturn::ERROR;
     }
-    state_position_.resize(info_.joints.size(), 0);
-    state_velocity_.resize(info_.joints.size(), 0);
-    command_velocity_.resize(info_.joints.size(), 0);
-    REGISTER_ROS2_CONTROL_INTROSPECTION("my_custom_introspection", &joint_introspection_);
     return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -24,21 +20,29 @@ hardware_interface::CallbackReturn robot_stepper_controller::StepperHardwareInte
 {
     (void)previous_state;
 
-    for (auto & state : state_position_)
-        state = 0;
-    for (auto & state : state_velocity_)
-        state = 0;
-    for (auto & command : command_velocity_)
-        command = 0;
+    // Initialize states and commands
+    for (size_t i = 0; i < 6; ++i) {
+        const std::string joint_name = "joint_" + std::to_string(i);
+        set_state(joint_name + "/position", home_position[i]);
+        set_state(joint_name + "/velocity", 0.0);
+        set_command(joint_name + "/position", home_position[i]);
+    }
 
     // Intialize publisher and subscriber
     node_ = rclcpp::Node::make_shared("stepper_hardware_interface_node");
     auto sensor_qos = rclcpp::SensorDataQoS();
     command_pub_ = node_->create_publisher<stepper_msgs::msg::StepperCommand>("stepper_command", sensor_qos);
     state_sub_ = node_->create_subscription<stepper_msgs::msg::StepperState>("stepper_state", sensor_qos, [this](stepper_msgs::msg::StepperState::SharedPtr msg){
-        state_position_ = msg->position;
-        state_velocity_ = msg->velocity;
+        auto joint_positions = steps_to_joints(msg->position);
+        auto joint_velocities = steps_to_joints(msg->velocity);
+        for (size_t i = 0; i < 6; i++)
+        {   
+            set_state("joint_" + std::to_string(i) + "/position", joint_positions[i]);
+            set_state("joint_" + std::to_string(i) + "/velocity", joint_velocities[i]);
+        }
     });
+    initial_position_pub_ = node_->create_publisher<stepper_msgs::msg::StepperCommand>("stepper_initial_positions", 1);
+    initial_position_pub_->publish(stepper_msgs::msg::StepperCommand().set__position(joints_to_steps(home_position)));
     return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -56,26 +60,7 @@ hardware_interface::return_type robot_stepper_controller::StepperHardwareInterfa
     {
         rclcpp::spin_some(node_);
     }
-    // Convert from steps to radians
-    for (size_t i = 0; i < 4; i++)
-    {   
-        double position = (state_position_[i] / (steps_per_rev * gear_ratio[i])) * 2.0 * M_PI;
-        position += home_position[i];
-        set_state("joint_" + std::to_string(i) + "/position", position);
-
-        double velocity = (state_velocity_[i] / (steps_per_rev * gear_ratio[i])) * 2.0 * M_PI;
-        set_state("joint_" + std::to_string(i) + "/velocity", velocity);
-    }
-    // Differential drive joints
-    double g1_position = (state_position_[4] / (steps_per_rev * gear_ratio[4])) * 2.0 * M_PI;
-    double g2_position = (state_position_[5] / (steps_per_rev * gear_ratio[5])) * 2.0 * M_PI;
-    set_state("joint_4/position", g1_position + g2_position + home_position[4]);
-    set_state("joint_5/position", g1_position - g2_position + home_position[5]);
-    double g1_velocity = (state_velocity_[4] / (steps_per_rev * gear_ratio[4])) * 2.0 * M_PI;
-    double g2_velocity = (state_velocity_[5] / (steps_per_rev * gear_ratio[5])) * 2.0 * M_PI;
-    set_state("joint_4/velocity", g1_velocity + g2_velocity);
-    set_state("joint_5/velocity", g1_velocity - g2_velocity);
-
+    // Reading is done in the subscription callback
     return hardware_interface::return_type::OK;
 }
 
@@ -83,21 +68,44 @@ hardware_interface::return_type robot_stepper_controller::StepperHardwareInterfa
 {
     (void)time;
     (void)period;
-    joint_introspection_ = get_command("joint_0/velocity");
+    std::vector<double> joint_commands;
+    for (size_t i = 0; i < 6; i++)
+    {
+        joint_commands.push_back(get_command("joint_" + std::to_string(i) + "/position"));
+    }
+    command_pub_->publish(stepper_msgs::msg::StepperCommand().set__position(joints_to_steps(joint_commands)));
+    return hardware_interface::return_type::OK;
+}
+
+std::vector<int32_t> robot_stepper_controller::StepperHardwareInterface::joints_to_steps(const std::vector<double> &joints)
+{
+    std::vector<int32_t> steps;
     for (size_t i = 0; i < 4; i++)
     {
-        double velocity = get_command("joint_" + std::to_string(i) + "/velocity");
-        command_velocity_[i] = static_cast<int32_t>((velocity / (2.0 * M_PI)) * steps_per_rev * gear_ratio[i]);
+        steps.push_back(static_cast<int32_t>((joints[i] / (2.0 * M_PI)) * steps_per_rev * gear_ratio[i]));
     }
     // Differential drive joints
-    double joint4_velocity = get_command("joint_4/velocity");
-    double joint5_velocity = get_command("joint_5/velocity");
-    double g1_velocity = (joint4_velocity + joint5_velocity);
-    double g2_velocity = (joint4_velocity - joint5_velocity);
-    command_velocity_[4] = static_cast<int32_t>((g1_velocity / (2.0 * M_PI)) * steps_per_rev * gear_ratio[4]);
-    command_velocity_[5] = static_cast<int32_t>((g2_velocity / (2.0 * M_PI)) * steps_per_rev * gear_ratio[5]);
-    command_pub_->publish(stepper_msgs::msg::StepperCommand().set__velocity(command_velocity_));
-    return hardware_interface::return_type::OK;
+    double g1_position = (joints[4] + joints[5]);
+    double g2_position = (joints[4] - joints[5]);
+    steps.push_back(static_cast<int32_t>((g1_position / (2.0 * M_PI)) * steps_per_rev * gear_ratio[4]));
+    steps.push_back(static_cast<int32_t>((g2_position / (2.0 * M_PI)) * steps_per_rev * gear_ratio[5]));
+    return steps;
+}
+
+std::vector<double> robot_stepper_controller::StepperHardwareInterface::steps_to_joints(const std::vector<int32_t> &steps)
+{
+    std::vector<double> joints;
+    // Convert from steps to radians
+    for (size_t i = 0; i < 4; i++)
+    {   
+        joints.push_back((steps[i] / (steps_per_rev * gear_ratio[i])) * 2.0 * M_PI);
+    }
+    // Differential drive joints
+    double g1_position = (steps[4] / (steps_per_rev * gear_ratio[4])) * 2.0 * M_PI;
+    double g2_position = (steps[5] / (steps_per_rev * gear_ratio[5])) * 2.0 * M_PI;
+    joints.push_back((g1_position + g2_position) / 2.0);
+    joints.push_back((g1_position - g2_position) / 2.0);
+    return joints;
 }
 
 #include "pluginlib/class_list_macros.hpp"
