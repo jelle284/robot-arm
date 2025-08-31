@@ -13,10 +13,7 @@ class TestFirmware(Node):
         self.get_logger().info('Test Firmware Node has been started.')
         self.state_publisher = self.create_publisher(StepperState, 'stepper_state', qos_profile_sensor_data)
         self.command_subscriber = self.create_subscription(StepperCommand, 'stepper_command', self.status_callback, qos_profile_sensor_data)
-        self.initial_position_subscriber = self.create_subscription(StepperCommand, 'stepper_initial_position', self.status_callback, 1)
         self.cmd = StepperCommand()
-        self.initial_position = StepperCommand()
-        self.initial_position.position = [0]*AXIS_COUNT
         self.cmd.position = [0]*AXIS_COUNT
         self.state = StepperState()
         self.pos_float = [0.0]*AXIS_COUNT
@@ -41,7 +38,7 @@ class TestFirmware(Node):
             if vel < -MAX_VEL: vel_clamped = -MAX_VEL
             self.pos_float[i] += vel_clamped * UPDATE_RATE
             self.state.velocity[i] = int(vel_clamped)
-            self.state.position[i] = self.initial_position.position[i] + int(self.pos_float[i])
+            self.state.position[i] = int(self.pos_float[i])
         self.state_publisher.publish(self.state)
 
 if __name__ == '__main__':

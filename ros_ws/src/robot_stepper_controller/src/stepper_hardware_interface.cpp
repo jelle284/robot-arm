@@ -37,12 +37,11 @@ hardware_interface::CallbackReturn robot_stepper_controller::StepperHardwareInte
         auto joint_velocities = steps_to_joints(msg->velocity);
         for (size_t i = 0; i < 6; i++)
         {   
-            set_state("joint_" + std::to_string(i) + "/position", joint_positions[i]);
+            double pos = joint_positions[i] + home_position[i];
+            set_state("joint_" + std::to_string(i) + "/position", pos);
             set_state("joint_" + std::to_string(i) + "/velocity", joint_velocities[i]);
         }
     });
-    initial_position_pub_ = node_->create_publisher<stepper_msgs::msg::StepperCommand>("stepper_initial_positions", 1);
-    initial_position_pub_->publish(stepper_msgs::msg::StepperCommand().set__position(joints_to_steps(home_position)));
     return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -71,7 +70,8 @@ hardware_interface::return_type robot_stepper_controller::StepperHardwareInterfa
     std::vector<double> joint_commands;
     for (size_t i = 0; i < 6; i++)
     {
-        joint_commands.push_back(get_command("joint_" + std::to_string(i) + "/position"));
+        double cmd = get_command("joint_" + std::to_string(i) + "/position") - home_position[i];
+        joint_commands.push_back(cmd);
     }
     command_pub_->publish(stepper_msgs::msg::StepperCommand().set__position(joints_to_steps(joint_commands)));
     return hardware_interface::return_type::OK;

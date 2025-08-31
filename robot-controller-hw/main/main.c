@@ -28,10 +28,10 @@
 stepper_motor_handle_t motor_handle[AXIS_NUM];
 const int pulse_pins[] = {26, 14, 23, 33, 18, 21};
 const int dir_pins[] = {27, 13, 4, 25, 19, 22};
-int target_position[AXIS_NUM] = {0};
+int target_positions[AXIS_NUM] = {0};
 
-rcl_publisher_t publisher;
-rcl_subscription_t subscriber;
+rcl_publisher_t state_publisher;
+rcl_subscription_t command_subscriber;
 stepper_msgs__msg__StepperCommand stepper_command;
 stepper_msgs__msg__StepperState stepper_state;
 static const char *TAG = "main";
@@ -75,7 +75,7 @@ void control_loop(void* arg) {
                 continue;
             }
             float measurement = (float)stepper_motor_get_position(motor_handle[i]);
-            float setpoint = (float)target_position[i];
+            float setpoint = (float)target_positions[i];
             float control_signal = pid_update(&states[i], &params, setpoint, measurement);
             stepper_motor_set_speed(motor_handle[i], (int)control_signal);
         }
@@ -84,17 +84,15 @@ void control_loop(void* arg) {
 }
 
 // Micro-ROS stuff below
-void subscription_callback(const void * msgin)
+
+void command_callback(const void * msgin)
 {
 	const stepper_msgs__msg__StepperCommand * msg = (const stepper_msgs__msg__StepperCommand *)msgin;
     for (int i = 0; i < AXIS_NUM; i++) {
         if (i > msg->position.size) {
             break;
         }
-        if (motor_handle[i] == NULL) {
-            continue;
-        }
-        target_position[i] = msg->position.data[i];
+        target_positions[i] = msg->position.data[i];
     }
 }
 
@@ -113,7 +111,7 @@ void timer_callback(rcl_timer_t * timer, int64_t last_call_time)
             stepper_state.position.size++;
             stepper_state.velocity.size++;
         }
-		RCSOFTCHECK(rcl_publish(&publisher, &stepper_state, NULL));
+		RCSOFTCHECK(rcl_publish(&state_publisher, &stepper_state, NULL));
 	}
 }
 
@@ -147,14 +145,14 @@ void micro_ros_task(void * arg)
 	
     // Create publisher.
 	RCCHECK(rclc_publisher_init_best_effort(
-		&publisher,
+		&state_publisher,
 		&node,
 		ROSIDL_GET_MSG_TYPE_SUPPORT(stepper_msgs, msg, StepperState),
 		"stepper_state"));
 
 	// Create subscriber.
 	RCCHECK(rclc_subscription_init_best_effort(
-		&subscriber,
+		&command_subscriber,
 		&node,
 		ROSIDL_GET_MSG_TYPE_SUPPORT(stepper_msgs, msg, StepperCommand),
 		"stepper_command"));
@@ -188,8 +186,8 @@ void micro_ros_task(void * arg)
 
 	// Add timer and subscriber to executor.
 	RCCHECK(rclc_executor_add_timer(&executor, &timer));
-	RCCHECK(rclc_executor_add_subscription(&executor, &subscriber, &stepper_command, &subscription_callback, ON_NEW_DATA));
-
+	RCCHECK(rclc_executor_add_subscription(&executor, &command_subscriber, &stepper_command, &command_callback, ON_NEW_DATA));
+	
 	// Spin forever.
     ESP_LOGI("micro_ros", "Starting micro-ROS executor loop");
     TickType_t ticks = xTaskGetTickCount();
@@ -199,8 +197,8 @@ void micro_ros_task(void * arg)
 	}
 
 	// Free resources.
-	RCCHECK(rcl_subscription_fini(&subscriber, &node));
-	RCCHECK(rcl_publisher_fini(&publisher, &node));
+	RCCHECK(rcl_subscription_fini(&command_subscriber, &node));
+	RCCHECK(rcl_publisher_fini(&state_publisher, &node));
 	RCCHECK(rcl_node_fini(&node));
 
   	vTaskDelete(NULL);

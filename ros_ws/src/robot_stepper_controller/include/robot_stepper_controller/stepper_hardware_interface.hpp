@@ -25,7 +25,6 @@ namespace robot_stepper_controller {
         private:
             rclcpp::Node::SharedPtr node_;
             rclcpp::Publisher<stepper_msgs::msg::StepperCommand>::SharedPtr command_pub_;
-            rclcpp::Publisher<stepper_msgs::msg::StepperCommand>::SharedPtr initial_position_pub_;
             rclcpp::Subscription<stepper_msgs::msg::StepperState>::SharedPtr state_sub_;
 
             std::vector<int32_t> joints_to_steps(const std::vector<double>& joints);

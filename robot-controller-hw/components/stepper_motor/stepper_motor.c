@@ -51,9 +51,14 @@ stepper_motor_handle_t stepper_motor_init(gpio_num_t pul_pin, gpio_num_t dir_pin
     pcnt_unit_config_t unit_config = {
         .high_limit = INT16_MAX,
         .low_limit = INT16_MIN,
+        .flags.accum_count = 1,
     };
     ESP_ERROR_CHECK(pcnt_new_unit(&unit_config, &handle->pcnt_unit));
 
+    ESP_LOGI(TAG, "set watch points");
+    ESP_ERROR_CHECK(pcnt_unit_add_watch_point(handle->pcnt_unit, INT16_MAX));
+    ESP_ERROR_CHECK(pcnt_unit_add_watch_point(handle->pcnt_unit, INT16_MIN));
+    
     ESP_LOGI(TAG, "set glitch filter");
     pcnt_glitch_filter_config_t filter_config = {
         .max_glitch_ns = 1000,
@@ -68,6 +73,7 @@ stepper_motor_handle_t stepper_motor_init(gpio_num_t pul_pin, gpio_num_t dir_pin
     };
     pcnt_channel_handle_t pcnt_chan = NULL;
     ESP_ERROR_CHECK(pcnt_new_channel(handle->pcnt_unit, &chan_config, &pcnt_chan));
+    
     ESP_LOGI(TAG, "set edge and level actions for pcnt channels");
     ESP_ERROR_CHECK(pcnt_channel_set_edge_action(
         pcnt_chan, 
@@ -163,7 +169,7 @@ void stepper_motor_set_speed(stepper_motor_handle_t handle, int speed_hz) {
     handle->speed = speed_hz; // Store the speed in the handle
     gpio_set_level(handle->dir_pin, speed_hz < 0 ? 1 : 0);
     speed_hz = abs(speed_hz);
-    if (speed_hz > 10) {
+    if (speed_hz > 1) {
         if (handle->status != STEPPER_MOTOR_STATUS_RUNNING) {
             stepper_motor_start(handle); // Start the motor if it is not already running
         }
