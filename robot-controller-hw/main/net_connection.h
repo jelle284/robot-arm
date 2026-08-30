@@ -7,8 +7,8 @@
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "nvs_flash.h"
-#include "wifi_provisioning/manager.h"
-#include "wifi_provisioning/scheme_softap.h"
+#include "network_provisioning/manager.h"
+#include "network_provisioning/scheme_softap.h"
 
 #define BIT_WIFI_CONNECTED BIT0
 

@@ -45,25 +45,25 @@ void network_init() {
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
     ESP_LOGI(TAG, "init provision");
-    wifi_prov_mgr_config_t prov_cfg  = {
-        .scheme = wifi_prov_scheme_softap,
-        .scheme_event_handler = WIFI_PROV_EVENT_HANDLER_NONE
+    network_prov_mgr_config_t prov_cfg  = {
+        .scheme = network_prov_scheme_softap,
+        .scheme_event_handler = NETWORK_PROV_EVENT_HANDLER_NONE
     };
-    ESP_ERROR_CHECK( wifi_prov_mgr_init(prov_cfg) );
+    ESP_ERROR_CHECK( network_prov_mgr_init(prov_cfg) );
     bool provisioned = false;
-    ESP_ERROR_CHECK(wifi_prov_mgr_is_provisioned(&provisioned));
+    ESP_ERROR_CHECK(network_prov_mgr_is_wifi_provisioned(&provisioned));
     if (!provisioned){
         ESP_LOGI(TAG, "starting provision");
         const char *service_name = "my_device";
         const char *service_key  = "password";
-        wifi_prov_security_t security = WIFI_PROV_SECURITY_1;
+        network_prov_security_t security = NETWORK_PROV_SECURITY_1;
         const char *pop = "abcd1234";
-        ESP_ERROR_CHECK( wifi_prov_mgr_start_provisioning(security, pop, service_name, service_key) );
+        ESP_ERROR_CHECK( network_prov_mgr_start_provisioning(security, pop, service_name, service_key) );
     } else {
         ESP_LOGI(TAG, "device already provisioned!");
     }
-    wifi_prov_mgr_wait();
-    wifi_prov_mgr_deinit();
+    network_prov_mgr_wait();
+    network_prov_mgr_deinit();
     
     ESP_LOGI(TAG, "Connecting to Wi-Fi");
     ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_STA) );

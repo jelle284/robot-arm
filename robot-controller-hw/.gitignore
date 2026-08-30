@@ -1,3 +1,8 @@
 build
 .vscode
 .devcontainer
+dependencies.lock
+sdkconfig
+sdkconfig.old
+extra_ros_packages/stepper_msgs
+managed_components

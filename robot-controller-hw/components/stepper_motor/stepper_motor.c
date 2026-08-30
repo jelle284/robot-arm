@@ -69,11 +69,10 @@ stepper_motor_handle_t stepper_motor_init(gpio_num_t pul_pin, gpio_num_t dir_pin
     pcnt_chan_config_t chan_config = {
         .edge_gpio_num = pul_pin,
         .level_gpio_num = dir_pin,
-        .flags.io_loop_back = 1,
     };
     pcnt_channel_handle_t pcnt_chan = NULL;
     ESP_ERROR_CHECK(pcnt_new_channel(handle->pcnt_unit, &chan_config, &pcnt_chan));
-    
+
     ESP_LOGI(TAG, "set edge and level actions for pcnt channels");
     ESP_ERROR_CHECK(pcnt_channel_set_edge_action(
         pcnt_chan, 
@@ -121,7 +120,6 @@ stepper_motor_handle_t stepper_motor_init(gpio_num_t pul_pin, gpio_num_t dir_pin
     mcpwm_gen_handle_t generator = NULL;
     mcpwm_generator_config_t generator_config = {
         .gen_gpio_num = pul_pin,
-        .flags.io_loop_back = 1,
     };
     ESP_ERROR_CHECK(mcpwm_new_generator(oper, &generator_config, &generator));
 
@@ -140,6 +138,9 @@ stepper_motor_handle_t stepper_motor_init(gpio_num_t pul_pin, gpio_num_t dir_pin
         generator,
         MCPWM_GEN_COMPARE_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, comparator, MCPWM_GEN_ACTION_LOW))
     );
+
+    // suggested bug remedy, check if needed. this needs to happen prior to starting the modules so move pcnt start to after this
+    // ESP_ERROR_CHECK(gpio_set_direction(pul_pin, GPIO_MODE_INPUT_OUTPUT));
 
     ESP_LOGI(TAG, "Enable and start timer");
     ESP_ERROR_CHECK(mcpwm_timer_enable(handle->mcpwm_timer));
