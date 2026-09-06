@@ -3,4 +3,7 @@ idf_component_register(
         "main.c"
         "pid_controller.c"
         "net_connection.c"
-    INCLUDE_DIRS ".")
+        "uros_routine.c"
+        "io_expander.c"
+    INCLUDE_DIRS "."
+)

@@ -15,4 +15,4 @@ dependencies:
   #   # All dependencies of `main` are public by default.
   #   public: true
   espressif/network_provisioning: '*'
-  micro-ros/micro_ros_espidf_component: '>=24.0.0-jazzy.0'
+  micro-ros/micro_ros_espidf_component: '~24.0.0-jazzy.0'
