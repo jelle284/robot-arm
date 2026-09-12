@@ -1,9 +1,11 @@
 FROM docker.io/ros:jazzy-ros-core
 
-# Installer kun de absolut mest nødvendige build-værktøjer og ryd op med det samme
+# Installer build-værktøjer (nødvendigt for colcon) samt python-pakker
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     python3-colcon-common-extensions \
+    build-essential \
+    cmake \
     && rm -rf /var/lib/apt/lists/*
 
 # Installer FastAPI og afhængigheder
