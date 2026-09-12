@@ -3,7 +3,6 @@
 #include "esp_log.h"
 
 #include "net_connection.h"
-#include "stepper_motor.h"
 #include "pid_controller.h"
 #include "io_expander.h"
 #include "uros_routine.h"
@@ -11,14 +10,13 @@
 
 static const char *TAG = "main";
 
-stepper_motor_handle_t motor_handle[AXIS_NUM];
 const int pulse_pins[] = {26, 14, 23, 33, 18, 16};
 const int dir_pins[] = {27, 13, 4, 25, 19, 17};
+
+stepper_motor_handle_t motor_handle[AXIS_NUM];
 int target_positions[AXIS_NUM] = {0};
 
-
 void control_loop(void* arg);
-
 
 // Main application
 void app_main() 

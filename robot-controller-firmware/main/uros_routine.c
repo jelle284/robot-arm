@@ -24,15 +24,25 @@ rclc_executor_t executor;
 rcl_publisher_t state_publisher;
 rcl_subscription_t command_subscriber;
 
+extern stepper_motor_handle_t motor_handle[AXIS_NUM];
+extern int target_positions[AXIS_NUM];
+
 void command_callback(const void * msgin)
 {
 	const stepper_msgs__msg__StepperCommand * msg = (const stepper_msgs__msg__StepperCommand *)msgin;
+    for (int i = 0; i < AXIS_NUM; ++i) {
+        target_positions[i] = msg->position.data[i];
+    }
 }
 
 void timer_callback(rcl_timer_t * timer, int64_t last_call_time)
 {
 	(void) last_call_time;
 	if (timer != NULL) {
+        for (int i = 0; i < AXIS_NUM; ++i) {
+            stepper_state.position.data[i] = stepper_motor_get_position(motor_handle[i]);
+            stepper_state.velocity.data[i] = stepper_motor_get_speed(motor_handle[i]);
+        }
 		RCSOFTCHECK(rcl_publish(&state_publisher, &stepper_state, NULL));
 	}
 }
@@ -76,10 +86,10 @@ bool create_entities() {
     stepper_command.position.size = 0;
     stepper_command.position.data = (int32_t*)malloc(AXIS_NUM * sizeof(int32_t));
     stepper_state.position.capacity = AXIS_NUM;
-    stepper_state.position.size = 0;
+    stepper_state.position.size = AXIS_NUM;
     stepper_state.position.data = (int32_t*)malloc(AXIS_NUM * sizeof(int32_t));
     stepper_state.velocity.capacity = AXIS_NUM;
-    stepper_state.velocity.size = 0;
+    stepper_state.velocity.size = AXIS_NUM;
     stepper_state.velocity.data = (int32_t*)malloc(AXIS_NUM * sizeof(int32_t));
 
 	// Create timer.

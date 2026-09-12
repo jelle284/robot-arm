@@ -1,0 +1,34 @@
+FROM docker.io/ros:jazzy-ros-core
+
+# Installer kun de absolut mest nødvendige build-værktøjer og ryd op med det samme
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3-pip \
+    python3-colcon-common-extensions \
+    && rm -rf /var/lib/apt/lists/*
+
+# Installer FastAPI og afhængigheder
+RUN pip3 install --no-cache-dir --break-system-packages \
+    fastapi \
+    uvicorn \
+    jinja2 \
+    pydantic
+
+# 1. Byg ROS2 workspace for dine custom beskeder
+WORKDIR /hmi_ws
+COPY ./ros_ws /hmi_ws/src/ros_ws
+RUN . /opt/ros/jazzy/setup.sh && colcon build --packages-select stepper_msgs
+
+# 2. Kopier FastAPI koden ind
+WORKDIR /app
+COPY ./web_hmi/main.py /app/main.py
+COPY ./web_hmi/templates /app/templates
+
+# Opret entrypoint script
+RUN echo '#!/bin/bash\n\
+source /opt/ros/jazzy/setup.bash\n\
+source /hmi_ws/install/setup.bash\n\
+exec uvicorn main:app --host 0.0.0.0 --port 8000' > /app/entrypoint.sh && \
+chmod +x /app/entrypoint.sh
+
+EXPOSE 8000
+ENTRYPOINT ["/app/entrypoint.sh"]
