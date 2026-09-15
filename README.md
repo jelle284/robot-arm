@@ -50,32 +50,18 @@ idf.py flash monitor
 ---
 
 ## 2. Run the micro-ROS Agent on a Raspberry Pi Server (UDP)
-To run the micro-ROS agent as a permanent background service on your Raspberry Pi, use the `-d` (detached) flag and set a restart policy. 
 
-### Option A: Use Host Networking (Recommended)
-This allows the agent to use the Raspberry Pi's network interface directly, ensuring the ESP32 can easily find it over UDP:
+-l 1000: Liveliness lease duration = 1000ms. Nodes must check in every 1 second or they're considered dead.
+
+-a 300: Liveliness announcement period = 300ms. How often the ESP32 announces it's alive
+
 ```bash
 podman run -d \
     --name microros-agent \
     --restart unless-stopped \
     --net=host \
-    docker.io/microros/micro-ros-agent:jazzy udp4 --port 8888
+    docker.io/microros/micro-ros-agent:jazzy udp4 --port 8888 -l 1000 -a 300
 ```
-
-### Option B: Isolated Port Forwarding
-If you prefer to isolate the container and only expose the specific UDP port:
-```bash
-podman run -d \
-    --name microros-agent \
-    --restart unless-stopped \
-    -p 8888:8888/udp \
-    docker.io/microros/micro-ros-agent:jazzy udp4 --port 8888
-```
-
-### Useful Management Commands for the Server:
-* **View logs (check connection):** `podman logs -f microros-agent`
-* **Stop the agent:** `podman stop microros-agent`
-* **Start it again:** `podman start microros-agent`
 
 ---
 
