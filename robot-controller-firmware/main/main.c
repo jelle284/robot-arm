@@ -28,9 +28,9 @@ void app_main()
     };
 
     gpio_config(&io_conf);
+    xTaskCreate(mcp23017_task, "mcp23017_task", 4096, NULL, configMAX_PRIORITIES - 1, &mcp23017_task_handle);
     gpio_install_isr_service(0);
     gpio_isr_handler_add(GPIO_NUM_34, mcp23017_gpio_isr_handler, NULL);
-    xTaskCreate(mcp23017_task, "mcp23017_task", 4096, NULL, configMAX_PRIORITIES - 1, &mcp23017_task_handle);
 
     for (int i = 0; i < AXIS_NUM; i++) {
         motor_handle[i] = stepper_motor_init(pulse_pins[i], dir_pins[i]);

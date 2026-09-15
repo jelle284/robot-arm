@@ -75,9 +75,8 @@ void mcp23017_task(void *arg)
         uint8_t red_btn = (port_b & BIT2) ? 1 : 0;
         uint8_t limit_switch = (port_b & BIT1) ? 1 : 0;
         if (status) {
-            ESP_LOGI("I/O", "Interrupted!\nlimit switch: %d", limit_switch);
-        } else {
-            ESP_LOGI("I/O", "A: %02x, B: %02x", port_a, port_b);
+            ESP_LOGI("I/O", "Interrupt!\nturn switch: %d\ngreen button: %d\nred button: %d\nlimit switch: %d",
+                turn_switch, green_btn, red_btn, limit_switch);
         }
             
     }

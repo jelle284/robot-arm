@@ -2,37 +2,54 @@
 
 This project contains both the ESP-IDF firmware and the ROS2 Jazzy workspace. To ensure a consistent build environment, Podman is used.
 
-## 1. Build the Podman Image
-First, build the custom container image containing ESP-IDF v6.1 and the required ROS2/Colcon build tools. Run this command from the **root directory** of the project (`robot-arm/`):
+## 1. Compile and Flash the Firmware (ESP-IDF)
+
+To avoid installing dependencies every time, we create a persistent container named `robot-build-env`. It will remember your `pip` installations between sessions.
+
+### First-Time Setup (Create and Configure Container)
+Run this command from the **root directory** (`robot-arm/`) to create the container, install the ROS2 build tools, and enter the workspace:
 
 ```bash
-podman build -t robot-arm-idf:latest .
-```
-
-## 2. Compile the Firmware (ESP-IDF)
-To compile the firmware, you must start the container from the **root directory**. This ensures that the relative symlink inside `robot-controller-firmware/extra_ros_packages` pointing to `ros_ws/src/stepper_msgs` resolves correctly inside the container.
-
-### Start the container interactively:
-```bash
-podman run -it --rm \
+podman run -it \
+    --name robot-build-env \
     --device=/dev/ttyUSB0 \
-    -v "\$(pwd)":/workspace \
+    --group-add keep-groups \
+    -v "$(pwd)":/workspace \
     -w /workspace/robot-controller-firmware \
-    robot-arm-idf:latest
+    docker.io/espressif/idf:release-v6.1 \
+    bash -c "pip install catkin_pkg colcon-common-extensions lark && bash"
 ```
 
-*Note: We mount the entire project root (`-v "$(pwd)":/workspace`), but set the working directory directly to the firmware folder (`-w /workspace/robot-controller-firmware`).*
-
-### Inside the container, run:
+Once inside, you can build right away:
 ```bash
 idf.py build
 ```
-*(Optional) To flash and monitor your ESP32 directly from the container:*
+To exit the container when you are done, simply type `exit`.
+
+---
+
+### Next-Time Use (Resume Your Work)
+When you return to work later, the container still exists with all packages installed. You do not need to run the long `podman run` command again. 
+
+Just **start** it and **attach** to it from your terminal:
+
 ```bash
+# 1. Start the existing container in the background
+podman start robot-build-env
+
+# 2. Enter the active container terminal
+podman attach robot-build-env
+```
+
+### Inside the container, you are ready to build or flash:
+```bash
+idf.py build
 idf.py flash monitor
 ```
 
-## 3. Run the micro-ROS Agent on a Raspberry Pi Server (UDP)
+---
+
+## 2. Run the micro-ROS Agent on a Raspberry Pi Server (UDP)
 To run the micro-ROS agent as a permanent background service on your Raspberry Pi, use the `-d` (detached) flag and set a restart policy. 
 
 ### Option A: Use Host Networking (Recommended)
@@ -60,7 +77,9 @@ podman run -d \
 * **Stop the agent:** `podman stop microros-agent`
 * **Start it again:** `podman start microros-agent`
 
-## 4. Run the Web HMI Container on Raspberry Pi
+---
+
+## 3. Run the Web HMI Container on Raspberry Pi
 To run the Web HMI in the background so it can communicate with the micro-ROS agent over the ROS2 network:
 
 ### Build the HMI Image:
@@ -76,6 +95,15 @@ podman build -f Dockerfile.hmi -t robot-web-hmi:latest .
 podman run -d \
     --name robot-hmi \
     --restart unless-stopped \
+    --net=host \
+    robot-web-hmi:latest
+```
+
+### Run the Container (Locally):
+
+```bash
+podman run -it --rm \
+    --name robot-hmi \
     --net=host \
     robot-web-hmi:latest
 ```
