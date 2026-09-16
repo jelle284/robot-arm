@@ -50,11 +50,10 @@ idf.py flash monitor
 ---
 
 ## 2. Run the micro-ROS Agent on a Raspberry Pi Server (UDP)
+To run the micro-ROS agent as a permanent background service on your Raspberry Pi, use the `-d` (detached) flag and set a restart policy.
 
--l 1000: Liveliness lease duration = 1000ms. Nodes must check in every 1 second or they're considered dead.
-
--a 300: Liveliness announcement period = 300ms. How often the ESP32 announces it's alive
-
+### Option A: Use Host Networking (Recommended)
+This allows the agent to use the Raspberry Pi's network interface directly, ensuring the ESP32 can easily find it over UDP:
 ```bash
 podman run -d \
     --name microros-agent \
@@ -63,9 +62,44 @@ podman run -d \
     docker.io/microros/micro-ros-agent:jazzy udp4 --port 8888 -l 1000 -a 300
 ```
 
+The `-l 1000` and `-a 300` flags enable liveliness checks to automatically prune stale nodes (e.g., after power cycling the ESP32).
+
+### Option B: Run ROS2 Discovery Server (For Multi-Machine Setup)
+If you need your PC to discover ROS2 topics from the Pi (e.g., to see `/stepper_state` from your ESP32), run a discovery server in a separate container:
+```bash
+podman run -d \
+    --name ros2-discovery-server \
+    --restart unless-stopped \
+    --net=host \
+    docker.io/ros/ros2:jazzy-ros-core \
+    ros2 daemon start --discovery-server-port 11811
+```
+
+Then on **all machines** (Pi and PC), set this environment variable:
+```bash
+export ROS_DISCOVERY_SERVER=192.168.0.10:11811
+```
+
+### Option C: Isolated Port Forwarding
+If you prefer to isolate the container and only expose the specific UDP port:
+```bash
+podman run -d \
+    --name microros-agent \
+    --restart unless-stopped \
+    -p 8888:8888/udp \
+    docker.io/microros/micro-ros-agent:jazzy udp4 --port 8888 -l 1000 -a 300
+```
+
+### Useful Management Commands for the Server:
+* **View logs (check connection):** `podman logs -f microros-agent`
+* **Stop the agent:** `podman stop microros-agent`
+* **Start it again:** `podman start microros-agent`
+
 ---
 
-## 3. Run the Web HMI Container on Raspberry Pi
+## 3. Run the ROS2 Discovery Server on Raspberry Pi
+
+## 4. Run the Web HMI Container on Raspberry Pi
 To run the Web HMI in the background so it can communicate with the micro-ROS agent over the ROS2 network:
 
 ### Build the HMI Image:
