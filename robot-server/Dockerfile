@@ -19,11 +19,12 @@ COPY ./fastdds_profile.xml /fastdds_profile.xml
 
 # Set up ROS2 workspace and build stepper_msgs
 WORKDIR /ros_ws
-COPY ./ros_ws /ros_ws
+COPY ./ros_ws/src/stepper_msgs /ros_ws/src/stepper_msgs
+RUN git clone https://github.com/micro-ROS/micro_ros_agent.git -b jazzy
 RUN . /opt/ros/jazzy/setup.sh && \
     rosdep update && \
     rosdep install --from-paths . --ignore-src -r -y && \
-    colcon build --packages-select stepper_msgs
+    colcon build stepper_msgs
 
 # Copy HMI code
 WORKDIR /app
