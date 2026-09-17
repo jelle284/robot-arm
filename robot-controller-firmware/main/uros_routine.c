@@ -31,6 +31,8 @@ rcl_init_options_t init_options;
 extern stepper_motor_handle_t motor_handle[AXIS_NUM];
 extern int target_positions[AXIS_NUM];
 
+static const char* TAG = "uros";
+
 void command_callback(const void *msgin)
 {
     const stepper_msgs__msg__StepperCommand *msg = (const stepper_msgs__msg__StepperCommand *)msgin;
@@ -38,6 +40,9 @@ void command_callback(const void *msgin)
     {
         target_positions[i] = msg->position.data[i];
     }
+    ESP_LOGI(TAG, "receiving targets (%d, %d, %d, %d, %d, %d)",
+        target_positions[0],target_positions[1],target_positions[2],
+        target_positions[3],target_positions[4],target_positions[5]);
 }
 
 void timer_callback(rcl_timer_t *timer, int64_t last_call_time)
