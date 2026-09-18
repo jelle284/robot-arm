@@ -1,7 +1,19 @@
+#include <inttypes.h>
 #include "stepper_motor.h"
 #include "esp_log.h"
 
 #define PULSE_WIDTH_US 50 // Pulse width in microseconds
+
+// The MCPWM timer's period register is 16-bit, and resolution_hz below is
+// 1 MHz (1 tick = 1 us), so the period computed from a target frequency
+// must stay within this many ticks or mcpwm_timer_set_period() rejects it.
+#define MCPWM_RESOLUTION_HZ  1000000
+#define MCPWM_MAX_PERIOD_TICKS 65535
+
+// Below this, 1e6 / speed_hz would overflow the period register.
+// (1000000 + 65535 - 1) / 65535 = 16, rounded up so 16 Hz itself is valid.
+#define MIN_STEP_FREQUENCY_HZ \
+    ((MCPWM_RESOLUTION_HZ + MCPWM_MAX_PERIOD_TICKS - 1) / MCPWM_MAX_PERIOD_TICKS)
 
 static const char *TAG = "stepper_motor";
 static size_t handle_count = 0;
@@ -170,12 +182,23 @@ void stepper_motor_set_speed(stepper_motor_handle_t handle, int speed_hz) {
     handle->speed = speed_hz; // Store the speed in the handle
     gpio_set_level(handle->dir_pin, speed_hz < 0 ? 1 : 0);
     speed_hz = abs(speed_hz);
-    if (speed_hz > 1) {
+
+    // Anything below MIN_STEP_FREQUENCY_HZ would produce a period that
+    // overflows the 16-bit MCPWM period register (see constants above),
+    // so it is treated the same as zero: stop, don't reject-and-hang.
+    if (speed_hz >= MIN_STEP_FREQUENCY_HZ) {
         if (handle->status != STEPPER_MOTOR_STATUS_RUNNING) {
             stepper_motor_start(handle); // Start the motor if it is not already running
         }
-        uint32_t period = 1000000 / speed_hz; // Convert speed in Hz to period in microseconds
-        mcpwm_timer_set_period(handle->mcpwm_timer, period);
+        uint32_t period = MCPWM_RESOLUTION_HZ / speed_hz; // us per step
+        if (period > MCPWM_MAX_PERIOD_TICKS) {
+            period = MCPWM_MAX_PERIOD_TICKS; // defensive clamp
+        }
+        esp_err_t err = mcpwm_timer_set_period(handle->mcpwm_timer, period);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "set_period(%" PRIu32 ") rejected: %s",
+                     period, esp_err_to_name(err));
+        }
     } else {
         stepper_motor_stop(handle); // Stop the motor if speed is too low
     }

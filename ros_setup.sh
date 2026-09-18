@@ -3,8 +3,7 @@ echo "Setting up ROS2 Jazzy environment..."
 source /opt/ros/jazzy/setup.bash
 
 export ROS_DOMAIN_ID=0
-export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
-export FASTRTPS_DEFAULT_PROFILES_FILE="./desktop-config/fastdds_profile.xml"
+
 cd ./ros_ws
 colcon build
 if [ -f "install/setup.bash" ]; then

@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Robot Arm HMI</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #f4f6f9; color: #222; padding: 20px; }
+  .container { max-width: 1000px; margin: 0 auto; background: #fff; padding: 24px; border-radius: 10px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; }
+  .card { border: 1px solid #e1e4e8; border-radius: 8px; padding: 16px; }
+  .card h2 { font-size: 1rem; margin: 0 0 12px; }
+  .row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .row label { width: 80px; font-weight: 600; font-size: .9rem; }
+  .row input { flex: 1; width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; }
+  .pos { font-variant-numeric: tabular-nums; }
+  button { padding: 8px 12px; border: 1px solid #cbd5e0; background: #e9edf1; border-radius: 4px; cursor: pointer; }
+  .primary { width: 100%; margin-top: 10px; background: #0366d6; color: #fff; border: none; font-weight: 600; }
+  .danger { background: #b42318; color: #fff; border: none; }
+  #status { margin-bottom: 16px; font-weight: 600; }
+  .ok { color: #1a7f37; } .warn { color: #9a6700; } .bad { color: #b42318; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Robot Arm HMI</h1>
+  <div id="status" class="bad">Loading…</div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Live position (steps)</h2>
+      <div id="telemetry"></div>
+    </div>
+
+    <div class="card">
+      <h2>Target position (steps)</h2>
+      <div id="controls"></div>
+      <button class="primary" onclick="sendSetpoints()">Update target</button>
+      <p style="font-size:.8rem;color:#666;margin:6px 0 0">
+        The controller streams the current target continuously while active
+        — this just changes what's being streamed.
+      </p>
+    </div>
+
+    <div class="card">
+      <h2>Session</h2>
+      <div class="row"><label>Controller</label><span id="client">–</span></div>
+      <button class="primary" onclick="activate(true)">Activate</button>
+      <button class="primary danger" onclick="activate(false)">Deactivate</button>
+
+      <h2 style="margin-top:20px">Parameters</h2>
+      <div class="row"><label>Kp</label><input type="number" step="0.01" id="kp" value="1.0"></div>
+      <div class="row"><label>Ki</label><input type="number" step="0.01" id="ki" value="0.2"></div>
+      <div class="row"><label>Kd</label><input type="number" step="0.01" id="kd" value="0.0"></div>
+      <div class="row"><label>Out min</label><input type="number" id="omin" value="-5000"></div>
+      <div class="row"><label>Out max</label><input type="number" id="omax" value="5000"></div>
+      <button class="primary" onclick="sendParameters()">Send parameters</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const AXES = 6;
+let live = Array(AXES).fill(0);
+let paramsLoaded = false;
+
+const controls = document.getElementById('controls');
+const telemetry = document.getElementById('telemetry');
+
+for (let i = 0; i < AXES; i++) {
+  controls.insertAdjacentHTML('beforeend', `
+    <div class="row">
+      <label>Joint ${i + 1}</label>
+      <input type="number" id="n-${i}" value="0">
+      <button onclick="syncJoint(${i})" title="Copy live position">Sync</button>
+    </div>`);
+  telemetry.insertAdjacentHTML('beforeend', `
+    <div class="row"><label>Joint ${i + 1}</label><span class="pos" id="p-${i}">–</span></div>`);
+}
+
+function syncJoint(i) { document.getElementById(`n-${i}`).value = live[i]; }
+
+function setStatus(text, cls) {
+  const el = document.getElementById('status');
+  el.textContent = text;
+  el.className = cls;
+}
+
+async function post(url, body) {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    setStatus(err.detail || `Request failed (${res.status})`, 'bad');
+  }
+  return res.ok;
+}
+
+async function poll() {
+  try {
+    const res = await fetch('/api/status');
+    const s = await res.json();
+    live = s.positions;
+    for (let i = 0; i < AXES; i++) {
+      document.getElementById(`p-${i}`).textContent = live[i];
+    }
+    document.getElementById('client').textContent = s.client_ip || 'not connected';
+
+    if (!s.connected)        setStatus('No controller connected', 'bad');
+    else if (!s.active)      setStatus('Connected, idle (not activated)', 'warn');
+    else if (!s.feedback_ok) setStatus('Active but no UDP feedback', 'warn');
+    else                     setStatus('Active, streaming', 'ok');
+
+    if (!paramsLoaded && s.parameters) {
+      document.getElementById('kp').value = s.parameters.kp;
+      document.getElementById('ki').value = s.parameters.ki;
+      document.getElementById('kd').value = s.parameters.kd;
+      document.getElementById('omin').value = s.parameters.output_min;
+      document.getElementById('omax').value = s.parameters.output_max;
+      paramsLoaded = true;
+    }
+  } catch (e) {
+    setStatus('Backend unreachable', 'bad');
+  }
+}
+
+function sendSetpoints() {
+  const positions = Array.from({ length: AXES },
+    (_, i) => parseInt(document.getElementById(`n-${i}`).value, 10) || 0);
+  post('/api/setpoints', { positions });
+}
+
+function sendParameters() {
+  post('/api/parameters', {
+    kp: parseFloat(document.getElementById('kp').value) || 0,
+    ki: parseFloat(document.getElementById('ki').value) || 0,
+    kd: parseFloat(document.getElementById('kd').value) || 0,
+    output_min: parseInt(document.getElementById('omin').value, 10) || 0,
+    output_max: parseInt(document.getElementById('omax').value, 10) || 0,
+  });
+}
+
+function activate(enable) {
+  if (enable) { for (let i = 0; i < AXES; i++) syncJoint(i); }
+  post('/api/activate', { enable });
+}
+
+setInterval(poll, 200);
+poll();
+</script>
+</body>
+</html>
